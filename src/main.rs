@@ -1,9 +1,19 @@
-use bevy::{app::AppExit, prelude::*};
+use bevy::{
+    app::AppExit,
+    prelude::*,
+    render::view::screenshot::{Screenshot, save_to_disk},
+};
 use nothing_happens::{debug_ui::DebugUiPlugin, metrics::MetricPlugin};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let metrics =
-        MetricPlugin::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/metrics.ron"))?;
+    let packaged_metrics = std::env::current_exe()?
+        .with_file_name("assets")
+        .join("metrics.ron");
+    let metrics = MetricPlugin::from_path(if packaged_metrics.is_file() {
+        packaged_metrics
+    } else {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/assets/metrics.ron").into()
+    })?;
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
@@ -31,8 +41,19 @@ fn exit_on_escape(keys: Res<ButtonInput<KeyCode>>, mut exit: MessageWriter<AppEx
     }
 }
 
-fn finish_smoke_test(mut frames: Local<u32>, mut exit: MessageWriter<AppExit>) {
+fn finish_smoke_test(
+    mut commands: Commands,
+    mut frames: Local<u32>,
+    mut exit: MessageWriter<AppExit>,
+) {
     *frames += 1;
+    if *frames == 60 {
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(
+                std::env::temp_dir().join("nothing-happens-debug-ui.png"),
+            ));
+    }
     if *frames == 120 {
         info!("Runtime smoke check complete: UI ran for 120 frames.");
         exit.write(AppExit::Success);
