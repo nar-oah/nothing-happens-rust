@@ -468,35 +468,55 @@ fn unchanged_annual_result_does_not_change_immediate_dependents() {
 }
 
 #[test]
-fn annual_metrics_use_the_same_source_snapshot_in_either_definition_order() {
-    let source = definition("source", 10.0, None);
-    let first = definition("first", 7.0, annual("source", 2.0));
-    let second = definition("second", 2.0, annual("first", 3.0));
+fn annual_source_is_rejected_before_startup() {
+    let result = MetricPlugin::new(vec![
+        definition("source", 10.0, None),
+        definition("first", 7.0, annual("source", 2.0)),
+        definition("second", 2.0, annual("first", 3.0)),
+    ]);
 
-    for definitions in [
-        vec![source.clone(), first.clone(), second.clone()],
-        vec![second, first, source],
-    ] {
-        let mut app = app_with(definitions);
-
-        advance_months(&mut app, 12);
-
-        assert_value(&mut app, "first", 20.0);
-        assert_value(&mut app, "second", 21.0);
-    }
+    assert!(matches!(
+        result,
+        Err(MetricError::AnnualSource { target, source })
+            if target == "second" && source == "first"
+    ));
 }
 
 #[test]
-fn annual_cycles_are_allowed_and_read_pre_settlement_values() {
-    let mut app = app_with(vec![
-        definition("left", 2.0, annual("right", 2.0)),
-        definition("right", 3.0, annual("left", 4.0)),
+fn annual_source_is_rejected_even_when_declared_after_its_target() {
+    let result = MetricPlugin::new(vec![
+        definition("second", 2.0, annual("first", 3.0)),
+        definition("first", 7.0, annual("source", 2.0)),
+        definition("source", 10.0, None),
     ]);
 
-    advance_months(&mut app, 12);
+    assert!(matches!(
+        result,
+        Err(MetricError::AnnualSource { target, source })
+            if target == "second" && source == "first"
+    ));
+}
 
-    assert_value(&mut app, "left", 6.0);
-    assert_value(&mut app, "right", 8.0);
+#[test]
+fn annual_self_dependency_is_rejected_before_startup() {
+    let result = MetricPlugin::new(vec![definition("self", 2.0, annual("self", 2.0))]);
+
+    assert!(matches!(
+        result,
+        Err(MetricError::AnnualSource { target, source })
+            if target == "self" && source == "self"
+    ));
+}
+
+#[test]
+fn annual_cycle_is_rejected_before_startup() {
+    let result = MetricPlugin::new(vec![
+        definition("first", 2.0, annual("third", 2.0)),
+        definition("second", 3.0, annual("first", 3.0)),
+        definition("third", 4.0, annual("second", 4.0)),
+    ]);
+
+    assert!(matches!(result, Err(MetricError::AnnualSource { .. })));
 }
 
 #[test]
