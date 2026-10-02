@@ -493,6 +493,30 @@ fn collapse_triggered_by_annual_settlement_resets_the_run() {
 }
 
 #[test]
+fn collapse_triggered_by_an_annual_delta_stops_remaining_settlement_work() {
+    let mut app = app_with(vec![
+        definition("source", 50.0, None),
+        definition("annual", 0.0, annual("source", 1.0)),
+        bounded(
+            definition(COLLAPSE_METRIC_ID, 0.0, immediate("annual", 2.0)),
+            0.0,
+            100.0,
+        ),
+        definition("later_annual", 7.0, annual("source", 3.0)),
+        definition("target", 5.0, immediate("later_annual", 1.0)),
+    ]);
+
+    advance_months(&mut app, 12);
+
+    assert_value(&app, "source", 50.0);
+    assert_value(&app, "annual", 0.0);
+    assert_value(&app, COLLAPSE_METRIC_ID, 0.0);
+    assert_value(&app, "later_annual", 7.0);
+    assert_value(&app, "target", 5.0);
+    assert_date(&app, 1, 1);
+}
+
+#[test]
 fn collapse_discards_remaining_actions_from_the_previous_run() {
     let mut app = app_with(vec![
         definition("source", 10.0, None),
