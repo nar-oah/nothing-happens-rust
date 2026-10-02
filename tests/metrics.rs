@@ -257,6 +257,60 @@ fn simultaneous_runtime_query_writes_propagate_each_external_delta_once() {
 }
 
 #[test]
+fn runtime_query_write_and_queued_action_each_propagate_in_the_same_frame() {
+    let mut app = app_with(vec![
+        definition("source", 10.0, None),
+        definition("target", 5.0, immediate("source", 2.0)),
+    ]);
+    app.insert_resource(DirectEdits(vec![("source", 2.0)]))
+        .add_systems(
+            Update,
+            apply_direct_edits.before(SimulationSet::ObserveChanges),
+        );
+
+    change(&mut app, "source", 3.0);
+
+    assert_value(&mut app, "source", 15.0);
+    assert_value(&mut app, "target", 15.0);
+
+    app.update();
+    assert_value(&mut app, "target", 15.0);
+}
+
+#[test]
+fn runtime_query_collapse_resets_without_repropagating_reset_deltas() {
+    let mut app = app_with(vec![
+        definition("source", 0.0, None),
+        bounded(
+            definition(COLLAPSE_METRIC_ID, 0.0, immediate("source", 10.0)),
+            0.0,
+            100.0,
+        ),
+        definition("target", 5.0, immediate(COLLAPSE_METRIC_ID, 2.0)),
+    ]);
+    advance_months(&mut app, 2);
+    app.insert_resource(DirectEdits(vec![("source", 15.0)]))
+        .add_systems(
+            Update,
+            apply_direct_edits.before(SimulationSet::ObserveChanges),
+        );
+
+    app.update();
+
+    assert_value(&mut app, "source", 0.0);
+    assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
+    assert_value(&mut app, "target", 5.0);
+    assert_date(&app, 1, 1);
+
+    app.update();
+
+    assert_value(&mut app, "source", 0.0);
+    assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
+    assert_value(&mut app, "target", 5.0);
+    assert_date(&app, 1, 1);
+}
+
+#[test]
 fn idle_and_unrelated_actions_do_not_mark_untouched_metric_values_changed() {
     let mut app = app_with(vec![
         definition("source", 10.0, None),
