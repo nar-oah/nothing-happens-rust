@@ -426,6 +426,12 @@ pub fn apply_action(world: &mut World, action: GameAction) -> Result<(), MetricE
 }
 
 fn bounded_value(definition: &MetricDefinition, mut value: f64) -> Result<f64, MetricError> {
+    // max/min deliberately ignore NaN, so reject it before applying bounds.
+    if value.is_nan() {
+        return Err(MetricError::InvalidValue {
+            id: definition.id.clone(),
+        });
+    }
     if let Some(min) = definition.min_value {
         value = value.max(min);
     }
