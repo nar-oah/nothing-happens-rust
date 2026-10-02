@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use nothing_happens::metrics::{
-    COLLAPSE_METRIC_ID, GameAction, GameDate, Influence, InfluenceTerm, Metric, MetricDefinition,
-    MetricEntities, MetricError, MetricPlugin, PendingActions,
+    AnnualInfluence, COLLAPSE_METRIC_ID, CollapseMetric, GameAction, GameDate, ImmediateInfluence,
+    Influence, InfluenceTerm, InitialValue, Metric, MetricBounds, MetricDefinition, MetricError,
+    MetricId, MetricMetadata, MetricOrder, MetricPlugin, MetricValue, PendingActions,
 };
 
 fn definition(id: &str, value: f64, influence: Option<Influence>) -> MetricDefinition {
@@ -67,19 +68,24 @@ fn advance_months(app: &mut App, months: usize) {
     act(app, (0..months).map(|_| GameAction::NextMonth));
 }
 
-fn value(app: &App, id: &str) -> f64 {
-    let entity = app
-        .world()
-        .resource::<MetricEntities>()
-        .entity(id)
-        .expect("metric entity exists");
-    app.world()
-        .get::<Metric>(entity)
-        .expect("entity has a Metric component")
-        .value
+fn entity(app: &mut App, id: &str) -> Entity {
+    let world = app.world_mut();
+    let mut query = world.query_filtered::<(Entity, &MetricId), With<Metric>>();
+    query
+        .iter(world)
+        .find_map(|(entity, metric_id)| (metric_id.0 == id).then_some(entity))
+        .expect("metric entity exists")
 }
 
-fn assert_value(app: &App, id: &str, expected: f64) {
+fn value(app: &mut App, id: &str) -> f64 {
+    let entity = entity(app, id);
+    app.world()
+        .get::<MetricValue>(entity)
+        .expect("entity has a MetricValue component")
+        .0
+}
+
+fn assert_value(app: &mut App, id: &str, expected: f64) {
     let actual = value(app, id);
     assert!(
         (actual - expected).abs() < 1e-10,
@@ -94,7 +100,7 @@ fn assert_date(app: &App, year: u32, month: u8) {
 
 #[test]
 fn startup_spawns_each_metric_without_propagating_initial_values() {
-    let app = app_with(vec![
+    let mut app = app_with(vec![
         definition("source", 50.0, None),
         definition("target", 3.0, immediate("source", 2.0)),
     ]);
@@ -102,11 +108,14 @@ fn startup_spawns_each_metric_without_propagating_initial_values() {
     assert_date(&app, 1, 1);
     assert_value(&app, "source", 50.0);
     assert_value(&app, "target", 3.0);
-    let entities = app.world().resource::<MetricEntities>();
-    assert_eq!(entities.ordered.len(), 2);
-    assert_eq!(entities.ordered[0], entities.entity("source").unwrap());
-    assert_eq!(entities.ordered[1], entities.entity("target").unwrap());
-    assert!(entities.entity("unknown").is_none());
+    let world = app.world_mut();
+    let mut query = world.query_filtered::<(&MetricId, &MetricOrder), With<Metric>>();
+    let mut metrics: Vec<_> = query
+        .iter(world)
+        .map(|(id, order)| (id.0.clone(), order.0))
+        .collect();
+    metrics.sort_by_key(|(_, order)| *order);
+    assert_eq!(metrics, [("source".to_owned(), 0), ("target".to_owned(), 1)]);
 }
 
 #[test]
