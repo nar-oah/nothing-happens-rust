@@ -119,8 +119,8 @@ impl Default for GameStatus {
     }
 }
 
-/// External value writers can run before ObserveChanges to propagate in the
-/// same update. Writes made after this set are observed on the next update.
+/// External MetricValue writers must run before ObserveChanges so their actual
+/// deltas are reconciled before queued actions or Immediate propagation.
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SimulationSet {
     ObserveChanges,
