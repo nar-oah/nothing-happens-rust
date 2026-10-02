@@ -591,7 +591,8 @@ fn propagate(
             let (_, _, _, _, _, value, _) = values
                 .get(entity)
                 .map_err(|_| MetricError::SimulationNotReady)?;
-            let (actual_delta, collapsed) = write_value(values, entity, value.0 + delta * factor)?;
+            let requested = value.0 + delta * factor;
+            let (actual_delta, collapsed) = write_value(values, entity, requested)?;
             if collapsed {
                 return Ok(true);
             }
