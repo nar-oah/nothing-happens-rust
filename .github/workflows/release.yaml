@@ -1,0 +1,213 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  contents: write
+
+env:
+  binary: nothing-happens
+  add_binaries_to_github_release: true
+  use_git_lfs: false
+
+jobs:
+  release-linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: olegtarasov/get-tag@v2.1.2
+        id: get_version
+
+      - uses: actions/checkout@v4
+        with:
+          lfs: ${{ env.use_git_lfs }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends \
+            g++ \
+            pkg-config \
+            libx11-dev \
+            libasound2-dev \
+            libudev-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-x11-0 \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libfontconfig1-dev
+
+      - name: Build
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Prepare package
+        run: |
+          mkdir linux
+          cp target/x86_64-unknown-linux-gnu/release/${{ env.binary }} linux/
+          cp -r assets linux/ || true
+
+      - name: Package as a zip
+        working-directory: ./linux
+        run: zip --recurse-paths ../${{ env.binary }}.zip .
+
+      - name: Upload binaries to artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: ${{ env.binary }}.zip
+          name: linux
+          retention-days: 1
+
+      - name: Upload binaries to release
+        if: ${{ env.add_binaries_to_github_release == 'true' }}
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ env.binary }}.zip
+          asset_name: ${{ env.binary }}-linux-${{ steps.get_version.outputs.tag }}.zip
+          tag: ${{ github.ref }}
+          overwrite: true
+
+  release-windows:
+    name: Windows
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: olegtarasov/get-tag@v2.1.2
+        id: get_version
+
+      - uses: actions/checkout@v4
+        with:
+          lfs: ${{ env.use_git_lfs }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Prepare package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path windows
+          Copy-Item "target/x86_64-pc-windows-msvc/release/${{ env.binary }}.exe" windows/
+          if (Test-Path assets) {
+            Copy-Item -Recurse assets windows/
+          }
+
+      - name: Package as a zip
+        shell: pwsh
+        run: Compress-Archive -Path windows/* -DestinationPath "${{ env.binary }}.zip"
+
+      - name: Upload binaries to artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: ${{ env.binary }}.zip
+          name: windows
+          retention-days: 1
+
+      - name: Upload binaries to release
+        if: ${{ env.add_binaries_to_github_release == 'true' }}
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ env.binary }}.zip
+          asset_name: ${{ env.binary }}-windows-${{ steps.get_version.outputs.tag }}.zip
+          tag: ${{ github.ref }}
+          overwrite: true
+
+  release-macos-intel:
+    name: macOS (Intel)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: olegtarasov/get-tag@v2.1.2
+        id: get_version
+
+      - uses: actions/checkout@v4
+        with:
+          lfs: ${{ env.use_git_lfs }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Build
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Prepare package
+        run: |
+          mkdir -p ${{ env.binary }}.app/Contents/MacOS
+          cp target/x86_64-apple-darwin/release/${{ env.binary }} ${{ env.binary }}.app/Contents/MacOS/
+          cp -r assets ${{ env.binary }}.app/Contents/MacOS/ || true
+          hdiutil create -fs HFS+ -volname "${{ env.binary }}" -srcfolder ${{ env.binary }}.app ${{ env.binary }}-macos-intel.dmg
+
+      - name: Upload binaries to artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: ${{ env.binary }}-macos-intel.dmg
+          name: macos-intel
+          retention-days: 1
+
+      - name: Upload binaries to release
+        if: ${{ env.add_binaries_to_github_release == 'true' }}
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ env.binary }}-macos-intel.dmg
+          asset_name: ${{ env.binary }}-macos-intel-${{ steps.get_version.outputs.tag }}.dmg
+          tag: ${{ github.ref }}
+          overwrite: true
+
+  release-macos-apple-silicon:
+    name: macOS (Apple Silicon)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: olegtarasov/get-tag@v2.1.2
+        id: get_version
+
+      - uses: actions/checkout@v4
+        with:
+          lfs: ${{ env.use_git_lfs }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Build
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Prepare package
+        run: |
+          mkdir -p ${{ env.binary }}.app/Contents/MacOS
+          cp target/aarch64-apple-darwin/release/${{ env.binary }} ${{ env.binary }}.app/Contents/MacOS/
+          cp -r assets ${{ env.binary }}.app/Contents/MacOS/ || true
+          hdiutil create -fs HFS+ -volname "${{ env.binary }}" -srcfolder ${{ env.binary }}.app ${{ env.binary }}-macos-apple-silicon.dmg
+
+      - name: Upload binaries to artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: ${{ env.binary }}-macos-apple-silicon.dmg
+          name: macos-apple-silicon
+          retention-days: 1
+
+      - name: Upload binaries to release
+        if: ${{ env.add_binaries_to_github_release == 'true' }}
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ env.binary }}-macos-apple-silicon.dmg
+          asset_name: ${{ env.binary }}-macos-apple-silicon-${{ steps.get_version.outputs.tag }}.dmg
+          tag: ${{ github.ref }}
+          overwrite: true
