@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use nothing_happens::metrics::{
     AnnualInfluence, COLLAPSE_METRIC_ID, CollapseMetric, GameAction, GameDate, ImmediateInfluence,
     Influence, InfluenceTerm, InitialValue, Metric, MetricBounds, MetricDefinition, MetricError,
-    MetricId, MetricMetadata, MetricOrder, MetricPlugin, MetricValue, PendingActions,
+    MetricId, MetricMetadata, MetricOrder, MetricPlugin, MetricValue, PendingActions, SimulationSet,
 };
 
 fn definition(id: &str, value: f64, influence: Option<Influence>) -> MetricDefinition {
@@ -98,6 +98,33 @@ fn assert_date(app: &App, year: u32, month: u8) {
     assert_eq!((date.year, date.month), (year, month));
 }
 
+#[derive(Resource, Default)]
+struct DirectEdits(Vec<(&'static str, f64)>);
+
+fn apply_direct_edits(
+    mut metrics: Query<(&MetricId, &mut MetricValue), With<Metric>>,
+    mut edits: ResMut<DirectEdits>,
+) {
+    for (id, delta) in edits.0.drain(..) {
+        let (_, mut value) = metrics
+            .iter_mut()
+            .find(|(metric_id, _)| metric_id.0 == id)
+            .expect("direct edit refers to a metric");
+        value.0 += delta;
+    }
+}
+
+#[derive(Resource, Default)]
+struct ChangedMetrics(Vec<String>);
+
+fn record_changed_metrics(
+    metrics: Query<&MetricId, (With<Metric>, Changed<MetricValue>)>,
+    mut changed: ResMut<ChangedMetrics>,
+) {
+    changed.0 = metrics.iter().map(|id| id.0.clone()).collect();
+    changed.0.sort();
+}
+
 #[test]
 fn startup_spawns_each_metric_without_propagating_initial_values() {
     let mut app = app_with(vec![
@@ -119,6 +146,139 @@ fn startup_spawns_each_metric_without_propagating_initial_values() {
         metrics,
         [("source".to_owned(), 0), ("target".to_owned(), 1)]
     );
+}
+
+#[test]
+fn startup_exposes_metric_data_and_entity_influences_as_distinct_components() {
+    let mut app = app_with(vec![
+        bounded(definition("source", 10.0, None), 0.0, 100.0),
+        definition("immediate", 2.0, immediate("source", 2.0)),
+        definition("annual", 3.0, annual("immediate", 3.0)),
+        bounded(definition(COLLAPSE_METRIC_ID, 0.0, None), 0.0, 100.0),
+    ]);
+
+    let world = app.world_mut();
+    let mut query = world.query_filtered::<
+        (
+            &MetricId,
+            &MetricMetadata,
+            &MetricValue,
+            &InitialValue,
+            &MetricBounds,
+            &MetricOrder,
+            Has<ImmediateInfluence>,
+            Has<AnnualInfluence>,
+            Has<CollapseMetric>,
+        ),
+        With<Metric>,
+    >();
+    let mut metrics = Vec::new();
+    for (id, metadata, value, initial, bounds, order, immediate, annual, collapse) in
+        query.iter(world)
+    {
+        assert_eq!(metadata.name, id.0);
+        assert_eq!(metadata.description, format!("Test metric {}", id.0));
+        assert_eq!(value.0, initial.0);
+        if id.0 == "source" || id.0 == COLLAPSE_METRIC_ID {
+            assert_eq!((bounds.min, bounds.max), (Some(0.0), Some(100.0)));
+        } else {
+            assert_eq!((bounds.min, bounds.max), (None, None));
+        }
+        metrics.push((id.0.clone(), order.0, immediate, annual, collapse));
+    }
+    metrics.sort_by_key(|(_, order, _, _, _)| *order);
+    assert_eq!(
+        metrics,
+        [
+            ("source".to_owned(), 0, false, false, false),
+            ("immediate".to_owned(), 1, true, false, false),
+            ("annual".to_owned(), 2, false, true, false),
+            (COLLAPSE_METRIC_ID.to_owned(), 3, false, false, true),
+        ]
+    );
+
+    let source = entity(&mut app, "source");
+    let immediate = entity(&mut app, "immediate");
+    let annual = entity(&mut app, "annual");
+    let inputs = &app.world().get::<ImmediateInfluence>(immediate).unwrap().0;
+    assert_eq!(inputs.len(), 1);
+    assert_eq!((inputs[0].source, inputs[0].factor), (source, 2.0));
+    let inputs = &app.world().get::<AnnualInfluence>(annual).unwrap().0;
+    assert_eq!(inputs.len(), 1);
+    assert_eq!((inputs[0].source, inputs[0].factor), (immediate, 3.0));
+}
+
+#[test]
+fn a_runtime_query_write_propagates_immediate_changes_once() {
+    let mut app = app_with(vec![
+        bounded(definition("source", 10.0, None), 0.0, 12.0),
+        definition("middle", 5.0, immediate("source", 2.0)),
+        definition("target", 1.0, immediate("middle", 3.0)),
+    ]);
+    app.insert_resource(DirectEdits(vec![("source", 20.0)]))
+        .add_systems(
+            Update,
+            apply_direct_edits.before(SimulationSet::ObserveChanges),
+        );
+
+    app.update();
+
+    assert_value(&mut app, "source", 12.0);
+    assert_value(&mut app, "middle", 9.0);
+    assert_value(&mut app, "target", 13.0);
+
+    app.update();
+
+    assert_value(&mut app, "middle", 9.0);
+    assert_value(&mut app, "target", 13.0);
+}
+
+#[test]
+fn simultaneous_runtime_query_writes_propagate_each_external_delta_once() {
+    let mut app = app_with(vec![
+        definition("source", 10.0, None),
+        definition("middle", 5.0, immediate("source", 2.0)),
+        definition("target", 1.0, immediate("middle", 3.0)),
+    ]);
+    app.insert_resource(DirectEdits(vec![("source", 2.0), ("middle", 4.0)]))
+        .add_systems(
+            Update,
+            apply_direct_edits.before(SimulationSet::ObserveChanges),
+        );
+
+    app.update();
+
+    assert_value(&mut app, "source", 12.0);
+    assert_value(&mut app, "middle", 13.0);
+    assert_value(&mut app, "target", 25.0);
+
+    app.update();
+    assert_value(&mut app, "target", 25.0);
+}
+
+#[test]
+fn idle_and_unrelated_actions_do_not_mark_untouched_metric_values_changed() {
+    let mut app = app_with(vec![
+        definition("source", 10.0, None),
+        definition("target", 5.0, immediate("source", 2.0)),
+        definition("untouched", 42.0, None),
+    ]);
+    app.init_resource::<ChangedMetrics>()
+        .add_systems(Update, record_changed_metrics.after(SimulationSet::ApplyActions));
+    app.update();
+    app.update();
+    assert!(app.world().resource::<ChangedMetrics>().0.is_empty());
+
+    change(&mut app, "source", 1.0);
+
+    assert_eq!(
+        app.world().resource::<ChangedMetrics>().0,
+        ["source".to_owned(), "target".to_owned()]
+    );
+    assert_value(&mut app, "untouched", 42.0);
+
+    change(&mut app, "source", 0.0);
+    assert!(app.world().resource::<ChangedMetrics>().0.is_empty());
 }
 
 #[test]
