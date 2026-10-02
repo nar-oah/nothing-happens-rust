@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 pub const COLLAPSE_METRIC_ID: &str = "collapse";
 
-/// Static metric data, loaded from a RON list before the app starts.
+/// RON-only input; runtime state belongs to individual metric entities.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct MetricDefinition {
     pub id: String,
@@ -36,24 +36,52 @@ pub struct InfluenceTerm {
     pub factor: f64,
 }
 
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct Metric;
+
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct MetricId(pub String);
+
 #[derive(Component, Clone, Debug)]
-pub struct Metric {
-    pub definition: MetricDefinition,
-    pub value: f64,
+pub struct MetricMetadata {
+    pub name: String,
+    pub description: String,
 }
 
-/// Preserves RON order for the UI and maps ids to their metric entities.
-#[derive(Resource, Clone, Debug, Default)]
-pub struct MetricEntities {
-    pub ordered: Vec<Entity>,
-    by_id: HashMap<String, Entity>,
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct MetricValue(pub f64);
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct InitialValue(pub f64);
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct MetricBounds {
+    pub min: Option<f64>,
+    pub max: Option<f64>,
 }
 
-impl MetricEntities {
-    pub fn entity(&self, id: &str) -> Option<Entity> {
-        self.by_id.get(id).copied()
-    }
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MetricOrder(pub usize);
+
+#[derive(Clone, Copy, Debug)]
+pub struct MetricInput {
+    pub source: Entity,
+    pub factor: f64,
 }
+
+#[derive(Component, Clone, Debug)]
+pub struct ImmediateInfluence(pub Vec<MetricInput>);
+
+#[derive(Component, Clone, Debug)]
+pub struct AnnualInfluence(pub Vec<MetricInput>);
+
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct CollapseMetric;
+
+/// Last value already propagated through Immediate influences. This is local
+/// to an entity so other systems can write MetricValue through ordinary Queries.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PreviousValue(pub f64);
 
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GameDate {
@@ -91,8 +119,11 @@ impl Default for GameStatus {
     }
 }
 
+/// External value writers can run before ObserveChanges to propagate in the
+/// same update. Writes made after this set are observed on the next update.
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SimulationSet {
+    ObserveChanges,
     ApplyActions,
 }
 
@@ -101,6 +132,7 @@ pub enum MetricError {
     DuplicateId(String),
     MissingSource { target: String, source: String },
     ImmediateCycle(Vec<String>),
+    AnnualSource { target: String, source: String },
     InvalidDefinition { id: String, reason: String },
     Load { path: String, reason: String },
     InvalidRon(String),
@@ -121,6 +153,9 @@ impl fmt::Display for MetricError {
             Self::ImmediateCycle(ids) => {
                 write!(f, "Immediate influence cycle: {}", ids.join(" -> "))
             }
+            Self::AnnualSource { target, source } => {
+                write!(f, "Annual metric {target} cannot reference Annual source {source}")
+            }
             Self::InvalidDefinition { id, reason } => {
                 write!(f, "invalid metric {id}: {reason}")
             }
@@ -129,7 +164,7 @@ impl fmt::Display for MetricError {
             Self::UnknownMetric(id) => write!(f, "unknown metric: {id}"),
             Self::NonFiniteDelta => write!(f, "metric changes must have a finite delta"),
             Self::InvalidValue { id } => write!(f, "calculation for metric {id} is not finite"),
-            Self::SimulationNotReady => write!(f, "metric entities have not been initialized"),
+            Self::SimulationNotReady => write!(f, "a required metric entity is unavailable"),
             Self::YearOverflow => write!(f, "game year exceeds the supported range"),
         }
     }
@@ -137,53 +172,14 @@ impl fmt::Display for MetricError {
 
 impl std::error::Error for MetricError {}
 
-#[derive(Resource, Clone)]
-struct MetricRules {
-    definitions: Vec<MetricDefinition>,
-    indices: HashMap<String, usize>,
-    immediate: Vec<Vec<(usize, f64)>>,
-    collapse: Option<usize>,
-}
-
-impl MetricRules {
-    fn new(definitions: Vec<MetricDefinition>) -> Result<Self, MetricError> {
-        validate_definitions(&definitions)?;
-        let indices: HashMap<_, _> = definitions
-            .iter()
-            .enumerate()
-            .map(|(index, definition)| (definition.id.clone(), index))
-            .collect();
-        let mut immediate = vec![Vec::new(); definitions.len()];
-        for (target, definition) in definitions.iter().enumerate() {
-            if let Some(Influence::Immediate(terms)) = &definition.influence {
-                for term in terms {
-                    immediate[indices[&term.source_metric]].push((target, term.factor));
-                }
-            }
-        }
-        let collapse = indices.get(COLLAPSE_METRIC_ID).copied();
-        Ok(Self {
-            definitions,
-            indices,
-            immediate,
-            collapse,
-        })
-    }
-
-    fn collapsed(&self, values: &[f64]) -> bool {
-        self.collapse.is_some_and(|index| values[index] >= 100.0)
-    }
-}
-
 pub struct MetricPlugin {
-    rules: MetricRules,
+    definitions: Vec<MetricDefinition>,
 }
 
 impl MetricPlugin {
     pub fn new(definitions: Vec<MetricDefinition>) -> Result<Self, MetricError> {
-        Ok(Self {
-            rules: MetricRules::new(definitions)?,
-        })
+        validate_definitions(&definitions)?;
+        Ok(Self { definitions })
     }
 
     pub fn from_ron(contents: &str) -> Result<Self, MetricError> {
@@ -207,33 +203,68 @@ impl MetricPlugin {
 
 impl Plugin for MetricPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(self.rules.clone())
-            .init_resource::<MetricEntities>()
-            .init_resource::<GameDate>()
+        // Resolve ids once while constructing the entities. No definition or
+        // value registry is retained in the runtime World.
+        let world = app.world_mut();
+        let mut entities = HashMap::new();
+        for (order, definition) in self.definitions.iter().enumerate() {
+            let mut entity = world.spawn((
+                Metric,
+                MetricId(definition.id.clone()),
+                MetricMetadata {
+                    name: definition.name.clone(),
+                    description: definition.description.clone(),
+                },
+                MetricValue(definition.initial_value),
+                InitialValue(definition.initial_value),
+                PreviousValue(definition.initial_value),
+                MetricBounds {
+                    min: definition.min_value,
+                    max: definition.max_value,
+                },
+                MetricOrder(order),
+            ));
+            if definition.id == COLLAPSE_METRIC_ID {
+                entity.insert(CollapseMetric);
+            }
+            entities.insert(definition.id.as_str(), entity.id());
+        }
+        for definition in &self.definitions {
+            let mut entity = world.entity_mut(entities[definition.id.as_str()]);
+            let resolve = |terms: &[InfluenceTerm]| {
+                terms
+                    .iter()
+                    .map(|term| MetricInput {
+                        source: entities[term.source_metric.as_str()],
+                        factor: term.factor,
+                    })
+                    .collect()
+            };
+            match &definition.influence {
+                Some(Influence::Immediate(terms)) => {
+                    entity.insert(ImmediateInfluence(resolve(terms)));
+                }
+                Some(Influence::Annual(terms)) => {
+                    entity.insert(AnnualInfluence(resolve(terms)));
+                }
+                None => {}
+            }
+        }
+
+        app.init_resource::<GameDate>()
             .init_resource::<GameStatus>()
             .init_resource::<PendingActions>()
-            .add_systems(Startup, spawn_metrics)
+            .configure_sets(
+                Update,
+                (SimulationSet::ObserveChanges, SimulationSet::ApplyActions).chain(),
+            )
             .add_systems(
                 Update,
-                apply_pending_actions.in_set(SimulationSet::ApplyActions),
+                (
+                    observe_metric_changes.in_set(SimulationSet::ObserveChanges),
+                    apply_pending_actions.in_set(SimulationSet::ApplyActions),
+                ),
             );
-    }
-}
-
-fn spawn_metrics(
-    mut commands: Commands,
-    rules: Res<MetricRules>,
-    mut entities: ResMut<MetricEntities>,
-) {
-    for definition in &rules.definitions {
-        let entity = commands
-            .spawn(Metric {
-                definition: definition.clone(),
-                value: definition.initial_value,
-            })
-            .id();
-        entities.ordered.push(entity);
-        entities.by_id.insert(definition.id.clone(), entity);
     }
 }
 
@@ -291,8 +322,17 @@ pub fn validate_definitions(definitions: &[MetricDefinition]) -> Result<(), Metr
                     reason: "influence factors must be finite".into(),
                 });
             }
-            if matches!(&definition.influence, Some(Influence::Immediate(_))) {
-                edges[source].push(target);
+            match &definition.influence {
+                Some(Influence::Immediate(_)) => edges[source].push(target),
+                Some(Influence::Annual(_))
+                    if matches!(definitions[source].influence, Some(Influence::Annual(_))) =>
+                {
+                    return Err(MetricError::AnnualSource {
+                        target: definition.id.clone(),
+                        source: term.source_metric.clone(),
+                    });
+                }
+                _ => {}
             }
         }
     }
@@ -335,192 +375,290 @@ fn visit_immediate(
     Ok(())
 }
 
-fn apply_pending_actions(world: &mut World) {
-    loop {
-        let action = world.resource_mut::<PendingActions>().0.pop_front();
-        let Some(action) = action else {
-            break;
-        };
-        if let Err(error) = apply_action(world, action) {
-            world.resource_mut::<GameStatus>().last_action = format!("Action failed: {error}");
+type MetricValues<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static MetricId,
+        &'static MetricBounds,
+        &'static InitialValue,
+        Option<&'static CollapseMetric>,
+        &'static mut MetricValue,
+        &'static mut PreviousValue,
+    ),
+    With<Metric>,
+>;
+
+type MetricInfluences<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static MetricOrder,
+        Option<&'static ImmediateInfluence>,
+        Option<&'static AnnualInfluence>,
+    ),
+    With<Metric>,
+>;
+
+fn observe_metric_changes(
+    mut values: MetricValues,
+    influences: MetricInfluences,
+    mut date: ResMut<GameDate>,
+    mut pending: ResMut<PendingActions>,
+    mut status: ResMut<GameStatus>,
+) {
+    let mut changed: Vec<(usize, Entity)> = values
+        .iter_mut()
+        .filter_map(|(entity, _, _, _, _, value, _)| {
+            value.is_changed().then(|| {
+                let (_, order, _, _) = influences.get(entity).unwrap();
+                (order.0, entity)
+            })
+        })
+        .collect();
+    changed.sort_by_key(|&(order, _)| order);
+
+    // Reconcile every external write before propagating. Otherwise an entity
+    // directly changed alongside one of its sources could propagate twice.
+    let mut deltas = VecDeque::new();
+    for (_, entity) in changed {
+        let (_, id, bounds, _, collapse, mut value, mut previous) =
+            values.get_mut(entity).unwrap();
+        let result = bounded_value(bounds, &id.0, value.0)
+            .and_then(|new| checked_delta(&id.0, new, previous.0).map(|delta| (new, delta)));
+        match result {
+            Ok((new, delta)) => {
+                if value.0 != new {
+                    value.0 = new;
+                }
+                if previous.0 != new {
+                    previous.0 = new;
+                }
+                if collapse.is_some() && new >= 100.0 {
+                    restart_game(&mut values, &mut date, &mut pending, &mut status);
+                    return;
+                }
+                if delta != 0.0 {
+                    deltas.push_back((entity, delta));
+                }
+            }
+            Err(error) => {
+                // An invalid external write does not replace the last valid
+                // value or send a non-finite delta through the graph.
+                if value.0 != previous.0 {
+                    value.0 = previous.0;
+                }
+                status.last_action = format!("Action failed: {error}");
+            }
+        }
+    }
+    match propagate(&mut values, &influences, deltas) {
+        Ok(true) => restart_game(&mut values, &mut date, &mut pending, &mut status),
+        Ok(false) => {}
+        Err(error) => status.last_action = format!("Action failed: {error}"),
+    }
+}
+
+fn apply_pending_actions(
+    mut values: MetricValues,
+    influences: MetricInfluences,
+    mut date: ResMut<GameDate>,
+    mut pending: ResMut<PendingActions>,
+    mut status: ResMut<GameStatus>,
+) {
+    while let Some(action) = pending.0.pop_front() {
+        match execute_action(action, &mut values, &influences, &mut date) {
+            Ok((true, _)) => {
+                restart_game(&mut values, &mut date, &mut pending, &mut status);
+                break;
+            }
+            Ok((false, message)) => status.last_action = message,
+            Err(error) => status.last_action = format!("Action failed: {error}"),
         }
     }
 }
 
-/// Applies a complete action atomically; an invalid numeric calculation leaves
-/// the current run unchanged. Collapse aborts propagation and clears old clicks.
-pub fn apply_action(world: &mut World, action: GameAction) -> Result<(), MetricError> {
-    let entities = world
-        .get_resource::<MetricEntities>()
-        .ok_or(MetricError::SimulationNotReady)?
-        .ordered
-        .clone();
-    let mut values: Vec<f64> = entities
-        .iter()
-        .map(|&entity| {
-            world
-                .get::<Metric>(entity)
-                .map(|metric| metric.value)
-                .ok_or(MetricError::SimulationNotReady)
-        })
-        .collect::<Result<_, _>>()?;
-    let mut date = *world
-        .get_resource::<GameDate>()
-        .ok_or(MetricError::SimulationNotReady)?;
-    let rules = world
-        .get_resource::<MetricRules>()
-        .ok_or(MetricError::SimulationNotReady)?;
-    if entities.len() != rules.definitions.len() {
-        return Err(MetricError::SimulationNotReady);
-    }
-
-    let (restart, message) = match action {
+fn execute_action(
+    action: GameAction,
+    values: &mut MetricValues,
+    influences: &MetricInfluences,
+    date: &mut GameDate,
+) -> Result<(bool, String), MetricError> {
+    match action {
         GameAction::ChangeMetric { id, delta } => {
             if !delta.is_finite() {
                 return Err(MetricError::NonFiniteDelta);
             }
-            let &index = rules
-                .indices
-                .get(&id)
+            let (entity, current) = values
+                .iter()
+                .find_map(|(entity, metric_id, _, _, _, value, _)| {
+                    (metric_id.0 == id).then_some((entity, value.0))
+                })
                 .ok_or_else(|| MetricError::UnknownMetric(id.clone()))?;
-            let actual_delta = change_value(rules, &mut values, index, delta)?;
-            let restart = rules.collapsed(&values)
-                || propagate(rules, &mut values, VecDeque::from([(index, actual_delta)]))?;
-            (restart, format!("{id}: {actual_delta:+.2}"))
+            let (actual_delta, collapsed) = write_value(values, entity, current + delta)?;
+            let collapsed = collapsed
+                || propagate(
+                    values,
+                    influences,
+                    VecDeque::from([(entity, actual_delta)]),
+                )?;
+            Ok((collapsed, format!("{id}: {actual_delta:+.2}")))
         }
         GameAction::NextMonth => {
             if date.month < 12 {
                 date.month += 1;
-                (false, "Advanced one month".into())
+                Ok((false, "Advanced one month".into()))
             } else {
-                date.year = date.year.checked_add(1).ok_or(MetricError::YearOverflow)?;
+                let year = date.year.checked_add(1).ok_or(MetricError::YearOverflow)?;
+                let collapsed = settle_annual(values, influences)?;
+                date.year = year;
                 date.month = 1;
-                (
-                    settle_annual(rules, &mut values)?,
-                    "Annual settlement complete".into(),
-                )
+                Ok((collapsed, "Annual settlement complete".into()))
             }
         }
-    };
-
-    if restart {
-        for (value, definition) in values.iter_mut().zip(&rules.definitions) {
-            *value = definition.initial_value;
-        }
-        date = GameDate::default();
     }
-    for (&entity, value) in entities.iter().zip(values) {
-        world.get_mut::<Metric>(entity).unwrap().value = value;
-    }
-    *world.resource_mut::<GameDate>() = date;
-    let mut status = world.resource_mut::<GameStatus>();
-    if restart {
-        status.restarts = status.restarts.saturating_add(1);
-        status.last_action = "Collapse reached 100. New game started.".into();
-        world.resource_mut::<PendingActions>().0.clear();
-    } else {
-        status.last_action = message;
-    }
-    Ok(())
 }
 
-fn bounded_value(definition: &MetricDefinition, mut value: f64) -> Result<f64, MetricError> {
-    // max/min deliberately ignore NaN, so reject it before applying bounds.
+fn bounded_value(bounds: &MetricBounds, id: &str, mut value: f64) -> Result<f64, MetricError> {
+    // f64::max/min ignore NaN; reject it before applying valid bounds.
     if value.is_nan() {
-        return Err(MetricError::InvalidValue {
-            id: definition.id.clone(),
-        });
+        return Err(MetricError::InvalidValue { id: id.into() });
     }
-    if let Some(min) = definition.min_value {
+    if let Some(min) = bounds.min {
         value = value.max(min);
     }
-    if let Some(max) = definition.max_value {
+    if let Some(max) = bounds.max {
         value = value.min(max);
     }
     if value.is_finite() {
         Ok(value)
     } else {
-        Err(MetricError::InvalidValue {
-            id: definition.id.clone(),
-        })
+        Err(MetricError::InvalidValue { id: id.into() })
     }
 }
 
-fn change_value(
-    rules: &MetricRules,
-    values: &mut [f64],
-    index: usize,
-    delta: f64,
-) -> Result<f64, MetricError> {
-    let value = bounded_value(&rules.definitions[index], values[index] + delta)?;
-    let actual_delta = value - values[index];
-    if !actual_delta.is_finite() {
-        return Err(MetricError::InvalidValue {
-            id: rules.definitions[index].id.clone(),
-        });
+fn checked_delta(id: &str, new: f64, old: f64) -> Result<f64, MetricError> {
+    let delta = new - old;
+    if delta.is_finite() {
+        Ok(delta)
+    } else {
+        Err(MetricError::InvalidValue { id: id.into() })
     }
-    values[index] = value;
-    Ok(actual_delta)
+}
+
+fn write_value(
+    values: &mut MetricValues,
+    entity: Entity,
+    requested: f64,
+) -> Result<(f64, bool), MetricError> {
+    let (_, id, bounds, _, collapse, mut value, mut previous) = values
+        .get_mut(entity)
+        .map_err(|_| MetricError::SimulationNotReady)?;
+    let new = bounded_value(bounds, &id.0, requested)?;
+    let delta = checked_delta(&id.0, new, value.0)?;
+    if value.0 != new {
+        value.0 = new;
+    }
+    if previous.0 != new {
+        previous.0 = new;
+    }
+    Ok((delta, collapse.is_some() && new >= 100.0))
 }
 
 fn propagate(
-    rules: &MetricRules,
-    values: &mut [f64],
-    mut changes: VecDeque<(usize, f64)>,
+    values: &mut MetricValues,
+    influences: &MetricInfluences,
+    mut deltas: VecDeque<(Entity, f64)>,
 ) -> Result<bool, MetricError> {
-    while let Some((source, delta)) = changes.pop_front() {
+    while let Some((source, delta)) = deltas.pop_front() {
         if delta == 0.0 {
             continue;
         }
-        for &(target, factor) in &rules.immediate[source] {
-            let actual_delta = change_value(rules, values, target, delta * factor)?;
-            if rules.collapsed(values) {
+        let mut targets = Vec::new();
+        for (entity, order, immediate, _) in influences.iter() {
+            if let Some(immediate) = immediate {
+                for input in &immediate.0 {
+                    if input.source == source {
+                        targets.push((order.0, entity, input.factor));
+                    }
+                }
+            }
+        }
+        targets.sort_by_key(|&(order, _, _)| order);
+        for (_, entity, factor) in targets {
+            let (_, _, _, _, _, value, _) = values
+                .get(entity)
+                .map_err(|_| MetricError::SimulationNotReady)?;
+            let (actual_delta, collapsed) = write_value(values, entity, value.0 + delta * factor)?;
+            if collapsed {
                 return Ok(true);
             }
             if actual_delta != 0.0 {
-                changes.push_back((target, actual_delta));
+                deltas.push_back((entity, actual_delta));
             }
         }
     }
     Ok(false)
 }
 
-fn settle_annual(rules: &MetricRules, values: &mut [f64]) -> Result<bool, MetricError> {
-    // Read every Annual source from the same end-of-year snapshot. Apply all
-    // Annual baselines before propagating deltas so later baselines cannot
-    // overwrite an Immediate change made during this settlement.
-    let snapshot = values.to_vec();
-    let annual_values: Vec<(usize, f64)> = rules
-        .definitions
-        .iter()
-        .enumerate()
-        .filter_map(|(index, definition)| {
-            if let Some(Influence::Annual(terms)) = &definition.influence {
-                let value = terms
-                    .iter()
-                    .map(|term| snapshot[rules.indices[&term.source_metric]] * term.factor)
-                    .sum();
-                Some(bounded_value(definition, value).map(|value| (index, value)))
-            } else {
-                None
-            }
-        })
-        .collect::<Result<_, _>>()?;
-    let mut changes = VecDeque::new();
-    for (index, value) in annual_values {
-        let actual_delta = value - values[index];
-        if !actual_delta.is_finite() {
-            return Err(MetricError::InvalidValue {
-                id: rules.definitions[index].id.clone(),
-            });
+fn settle_annual(
+    values: &mut MetricValues,
+    influences: &MetricInfluences,
+) -> Result<bool, MetricError> {
+    // Compute only Annual targets while every input still has its pre-settlement
+    // value. An Immediate intermediary can be an input even if an earlier
+    // Annual result will later change it through propagation.
+    let mut annual_values = Vec::new();
+    for (entity, order, _, annual) in influences.iter() {
+        let Some(annual) = annual else {
+            continue;
+        };
+        let mut sum = 0.0;
+        for input in &annual.0 {
+            let (_, _, _, _, _, value, _) = values
+                .get(input.source)
+                .map_err(|_| MetricError::SimulationNotReady)?;
+            sum += value.0 * input.factor;
         }
-        values[index] = value;
-        if rules.collapsed(values) {
+        let (_, id, bounds, _, _, old, _) = values
+            .get(entity)
+            .map_err(|_| MetricError::SimulationNotReady)?;
+        let new = bounded_value(bounds, &id.0, sum)?;
+        checked_delta(&id.0, new, old.0)?;
+        annual_values.push((order.0, entity, new));
+    }
+    annual_values.sort_by_key(|&(order, _, _)| order);
+    let mut deltas = VecDeque::new();
+    for (_, entity, value) in annual_values {
+        let (delta, collapsed) = write_value(values, entity, value)?;
+        if collapsed {
             return Ok(true);
         }
-        if actual_delta != 0.0 {
-            changes.push_back((index, actual_delta));
+        if delta != 0.0 {
+            deltas.push_back((entity, delta));
         }
     }
-    propagate(rules, values, changes)
+    propagate(values, influences, deltas)
+}
+
+fn restart_game(
+    values: &mut MetricValues,
+    date: &mut GameDate,
+    pending: &mut PendingActions,
+    status: &mut GameStatus,
+) {
+    for (_, _, _, initial, _, mut value, mut previous) in values.iter_mut() {
+        if value.0 != initial.0 {
+            value.0 = initial.0;
+        }
+        if previous.0 != initial.0 {
+            previous.0 = initial.0;
+        }
+    }
+    *date = GameDate::default();
+    pending.0.clear();
+    status.restarts = status.restarts.saturating_add(1);
+    status.last_action = "Collapse reached 100. New game started.".into();
 }
