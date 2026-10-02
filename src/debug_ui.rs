@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
 use crate::metrics::{
-    GameAction, GameDate, GameStatus, Influence, Metric, MetricEntities, PendingActions,
-    SimulationSet,
+    AnnualInfluence, GameAction, GameDate, GameStatus, ImmediateInfluence, Metric, MetricId,
+    MetricMetadata, MetricOrder, MetricValue, PendingActions, SimulationSet,
 };
 
 pub struct DebugUiPlugin;
@@ -57,7 +57,26 @@ fn button(text: impl Into<String>, action: GameAction) -> impl Bundle {
     )
 }
 
-fn setup_ui(mut commands: Commands, entities: Res<MetricEntities>, metrics: Query<&Metric>) {
+type MetricRowData = (
+    Entity,
+    &'static MetricId,
+    &'static MetricMetadata,
+    &'static MetricValue,
+    &'static MetricOrder,
+    Has<ImmediateInfluence>,
+    Has<AnnualInfluence>,
+);
+
+type MetricLabelData = (
+    &'static MetricMetadata,
+    &'static MetricValue,
+    Has<ImmediateInfluence>,
+    Has<AnnualInfluence>,
+);
+
+fn setup_ui(mut commands: Commands, metrics: Query<MetricRowData, With<Metric>>) {
+    let mut rows: Vec<_> = metrics.iter().collect();
+    rows.sort_by_key(|(_, _, _, _, order, _, _)| order.0);
     commands.spawn(Camera2d);
     commands
         .spawn(Node {
@@ -80,9 +99,7 @@ fn setup_ui(mut commands: Commands, entities: Res<MetricEntities>, metrics: Quer
                 SECONDARY_TEXT,
             ));
 
-            for &entity in &entities.ordered {
-                let metric = metrics.get(entity).expect("metric entity exists");
-                let definition = &metric.definition;
+            for &(entity, id, metadata, value, _, immediate, annual) in &rows {
                 root.spawn((
                     Node {
                         width: percent(100),
@@ -103,7 +120,7 @@ fn setup_ui(mut commands: Commands, entities: Res<MetricEntities>, metrics: Quer
                     })
                     .with_children(|header| {
                         header.spawn((
-                            label(metric_text(metric), 20.0, PRIMARY_TEXT),
+                            label(metric_text(metadata, value, immediate, annual), 20.0, PRIMARY_TEXT),
                             DisplayValue::Metric(entity),
                         ));
                         header
@@ -112,7 +129,7 @@ fn setup_ui(mut commands: Commands, entities: Res<MetricEntities>, metrics: Quer
                                 ..default()
                             })
                             .with_children(|controls| {
-                                let changes: &[f64] = if definition.id == "collapse" {
+                                let changes: &[f64] = if id.0 == "collapse" {
                                     &[25.0, 100.0]
                                 } else {
                                     &[-5.0, 5.0]
@@ -121,14 +138,14 @@ fn setup_ui(mut commands: Commands, entities: Res<MetricEntities>, metrics: Quer
                                     controls.spawn(button(
                                         format!("{delta:+.0}"),
                                         GameAction::ChangeMetric {
-                                            id: definition.id.clone(),
+                                            id: id.0.clone(),
                                             delta,
                                         },
                                     ));
                                 }
                             });
                     });
-                    row.spawn(label(&definition.description, 14.0, SECONDARY_TEXT));
+                    row.spawn(label(&metadata.description, 14.0, SECONDARY_TEXT));
                 });
             }
 
@@ -138,13 +155,15 @@ fn setup_ui(mut commands: Commands, entities: Res<MetricEntities>, metrics: Quer
         });
 }
 
-fn metric_text(metric: &Metric) -> String {
-    let kind = match metric.definition.influence {
-        Some(Influence::Immediate(_)) => "Immediate",
-        Some(Influence::Annual(_)) => "Annual",
-        None => "Manual",
+fn metric_text(metadata: &MetricMetadata, value: &MetricValue, immediate: bool, annual: bool) -> String {
+    let kind = if annual {
+        "Annual"
+    } else if immediate {
+        "Immediate"
+    } else {
+        "Manual"
     };
-    format!("{}  {:.2}  ·  {kind}", metric.definition.name, metric.value)
+    format!("{}  {:.2}  ·  {kind}", metadata.name, value.0)
 }
 
 fn handle_buttons(
@@ -167,7 +186,7 @@ fn handle_buttons(
 fn refresh_labels(
     date: Res<GameDate>,
     status: Res<GameStatus>,
-    metrics: Query<&Metric>,
+    metrics: Query<MetricLabelData, With<Metric>>,
     mut labels: Query<(&DisplayValue, &mut Text)>,
 ) {
     for (display, mut text) in &mut labels {
@@ -177,7 +196,8 @@ fn refresh_labels(
                 format!("重开次数：{}  ·  {}", status.restarts, status.last_action)
             }
             DisplayValue::Metric(entity) => {
-                metric_text(metrics.get(*entity).expect("metric entity exists"))
+                let (metadata, value, immediate, annual) = metrics.get(*entity).expect("metric entity exists");
+                metric_text(metadata, value, immediate, annual)
             }
         };
         if text.0 != value {
