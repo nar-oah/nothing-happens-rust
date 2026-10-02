@@ -154,7 +154,10 @@ impl fmt::Display for MetricError {
                 write!(f, "Immediate influence cycle: {}", ids.join(" -> "))
             }
             Self::AnnualSource { target, source } => {
-                write!(f, "Annual metric {target} cannot reference Annual source {source}")
+                write!(
+                    f,
+                    "Annual metric {target} cannot reference Annual source {source}"
+                )
             }
             Self::InvalidDefinition { id, reason } => {
                 write!(f, "invalid metric {id}: {reason}")
@@ -424,8 +427,7 @@ fn observe_metric_changes(
     // directly changed alongside one of its sources could propagate twice.
     let mut deltas = VecDeque::new();
     for (_, entity) in changed {
-        let (_, id, bounds, _, collapse, mut value, mut previous) =
-            values.get_mut(entity).unwrap();
+        let (_, id, bounds, _, collapse, mut value, mut previous) = values.get_mut(entity).unwrap();
         let result = bounded_value(bounds, &id.0, value.0)
             .and_then(|new| checked_delta(&id.0, new, previous.0).map(|delta| (new, delta)));
         match result {
@@ -499,11 +501,7 @@ fn execute_action(
                 .ok_or_else(|| MetricError::UnknownMetric(id.clone()))?;
             let (actual_delta, collapsed) = write_value(values, entity, current + delta)?;
             let collapsed = collapsed
-                || propagate(
-                    values,
-                    influences,
-                    VecDeque::from([(entity, actual_delta)]),
-                )?;
+                || propagate(values, influences, VecDeque::from([(entity, actual_delta)]))?;
             Ok((collapsed, format!("{id}: {actual_delta:+.2}")))
         }
         GameAction::NextMonth => {

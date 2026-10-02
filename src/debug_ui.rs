@@ -120,7 +120,11 @@ fn setup_ui(mut commands: Commands, metrics: Query<MetricRowData, With<Metric>>)
                     })
                     .with_children(|header| {
                         header.spawn((
-                            label(metric_text(metadata, value, immediate, annual), 20.0, PRIMARY_TEXT),
+                            label(
+                                metric_text(metadata, value, immediate, annual),
+                                20.0,
+                                PRIMARY_TEXT,
+                            ),
                             DisplayValue::Metric(entity),
                         ));
                         header
@@ -155,7 +159,12 @@ fn setup_ui(mut commands: Commands, metrics: Query<MetricRowData, With<Metric>>)
         });
 }
 
-fn metric_text(metadata: &MetricMetadata, value: &MetricValue, immediate: bool, annual: bool) -> String {
+fn metric_text(
+    metadata: &MetricMetadata,
+    value: &MetricValue,
+    immediate: bool,
+    annual: bool,
+) -> String {
     let kind = if annual {
         "Annual"
     } else if immediate {
@@ -196,7 +205,8 @@ fn refresh_labels(
                 format!("重开次数：{}  ·  {}", status.restarts, status.last_action)
             }
             DisplayValue::Metric(entity) => {
-                let (metadata, value, immediate, annual) = metrics.get(*entity).expect("metric entity exists");
+                let (metadata, value, immediate, annual) =
+                    metrics.get(*entity).expect("metric entity exists");
                 metric_text(metadata, value, immediate, annual)
             }
         };

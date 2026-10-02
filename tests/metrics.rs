@@ -115,7 +115,10 @@ fn startup_spawns_each_metric_without_propagating_initial_values() {
         .map(|(id, order)| (id.0.clone(), order.0))
         .collect();
     metrics.sort_by_key(|(_, order)| *order);
-    assert_eq!(metrics, [("source".to_owned(), 0), ("target".to_owned(), 1)]);
+    assert_eq!(
+        metrics,
+        [("source".to_owned(), 0), ("target".to_owned(), 1)]
+    );
 }
 
 #[test]
