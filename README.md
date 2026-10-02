@@ -20,6 +20,8 @@ cargo run
 cargo run -- --smoke-test
 ```
 
+检查会将应用窗口截图保存到系统临时目录的 `nothing-happens-debug-ui.png`。当前 Bevy 0.19.1 的文本依赖会在中文布局时输出 `ICU4X` 分词提示，这是[上游已记录的问题](https://github.com/bevyengine/bevy/issues/24094)；实测中文渲染和窗口运行正常。
+
 指标定义位于 `assets/metrics.ron`，启动时读取并校验，为每个指标生成一个带 `Metric` 组件的 Entity。`min_value`、`max_value`、`influence` 可省略；包含时使用 RON 的 `Some(...)`：
 
 ```ron
