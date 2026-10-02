@@ -185,3 +185,75 @@ fn refresh_labels(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metrics::MetricPlugin;
+
+    fn press(app: &mut App, action: GameAction) {
+        let world = app.world_mut();
+        let entity = world
+            .query::<(Entity, &DebugAction)>()
+            .iter(world)
+            .find_map(|(entity, button)| (button.0 == action).then_some(entity))
+            .expect("action has a UI button");
+        *world.get_mut::<Interaction>(entity).unwrap() = Interaction::None;
+        app.update();
+        *app.world_mut().get_mut::<Interaction>(entity).unwrap() = Interaction::Pressed;
+        app.update();
+    }
+
+    fn displays(app: &mut App, expected: &str) -> bool {
+        let world = app.world_mut();
+        world
+            .query::<&Text>()
+            .iter(world)
+            .any(|text| text.0 == expected)
+    }
+
+    #[test]
+    fn buttons_run_the_loop_and_refresh_labels_in_the_same_frame() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins((
+            MetricPlugin::from_ron(include_str!("../assets/metrics.ron")).unwrap(),
+            DebugUiPlugin,
+        ));
+        app.update();
+        assert!(displays(&mut app, "Year 1 / Month 1"));
+
+        press(
+            &mut app,
+            GameAction::ChangeMetric {
+                id: "productivity".into(),
+                delta: 5.0,
+            },
+        );
+        assert!(displays(&mut app, "生产力  15.00  ·  Manual"));
+        assert!(displays(&mut app, "产出  30.00  ·  Immediate"));
+        // A held button must not apply the change again in the next frame.
+        app.update();
+        assert!(displays(&mut app, "生产力  15.00  ·  Manual"));
+
+        for _ in 0..12 {
+            press(&mut app, GameAction::NextMonth);
+        }
+        assert!(displays(&mut app, "Year 2 / Month 1"));
+        assert!(displays(&mut app, "年收入  45.00  ·  Annual"));
+        assert!(displays(&mut app, "储备  72.50  ·  Immediate"));
+
+        press(
+            &mut app,
+            GameAction::ChangeMetric {
+                id: "collapse".into(),
+                delta: 100.0,
+            },
+        );
+        assert!(displays(&mut app, "Year 1 / Month 1"));
+        assert!(displays(&mut app, "生产力  10.00  ·  Manual"));
+        assert!(displays(&mut app, "年收入  0.00  ·  Annual"));
+        assert!(displays(&mut app, "储备  50.00  ·  Immediate"));
+        assert!(displays(&mut app, "崩溃度  0.00  ·  Manual"));
+        assert_eq!(app.world().resource::<GameStatus>().restarts, 1);
+    }
+}
