@@ -106,8 +106,8 @@ fn startup_spawns_each_metric_without_propagating_initial_values() {
     ]);
 
     assert_date(&app, 1, 1);
-    assert_value(&app, "source", 50.0);
-    assert_value(&app, "target", 3.0);
+    assert_value(&mut app, "source", 50.0);
+    assert_value(&mut app, "target", 3.0);
     let world = app.world_mut();
     let mut query = world.query_filtered::<(&MetricId, &MetricOrder), With<Metric>>();
     let mut metrics: Vec<_> = query
@@ -127,8 +127,8 @@ fn immediate_single_layer_propagates_the_source_delta() {
 
     change(&mut app, "source", 3.0);
 
-    assert_value(&app, "source", 13.0);
-    assert_value(&app, "target", 11.0);
+    assert_value(&mut app, "source", 13.0);
+    assert_value(&mut app, "target", 11.0);
 }
 
 #[test]
@@ -141,9 +141,9 @@ fn immediate_multiple_layers_propagate_each_actual_delta() {
 
     change(&mut app, "source", 4.0);
 
-    assert_value(&app, "source", 14.0);
-    assert_value(&app, "middle", 28.0);
-    assert_value(&app, "target", 7.0);
+    assert_value(&mut app, "source", 14.0);
+    assert_value(&mut app, "middle", 28.0);
+    assert_value(&mut app, "target", 7.0);
 }
 
 #[test]
@@ -154,11 +154,11 @@ fn source_maximum_limits_the_delta_sent_to_dependents() {
     ]);
 
     change(&mut app, "source", 20.0);
-    assert_value(&app, "source", 12.0);
-    assert_value(&app, "target", 11.0);
+    assert_value(&mut app, "source", 12.0);
+    assert_value(&mut app, "target", 11.0);
 
     change(&mut app, "source", 20.0);
-    assert_value(&app, "target", 11.0);
+    assert_value(&mut app, "target", 11.0);
 }
 
 #[test]
@@ -175,8 +175,8 @@ fn target_maximum_limits_the_delta_propagated_to_the_next_layer() {
 
     change(&mut app, "source", 3.0);
 
-    assert_value(&app, "middle", 10.0);
-    assert_value(&app, "target", 5.0);
+    assert_value(&mut app, "middle", 10.0);
+    assert_value(&mut app, "target", 5.0);
 }
 
 #[test]
@@ -193,9 +193,9 @@ fn source_and_target_minimums_limit_negative_propagation() {
 
     change(&mut app, "source", -10.0);
 
-    assert_value(&app, "source", 0.0);
-    assert_value(&app, "middle", 2.0);
-    assert_value(&app, "target", 8.0);
+    assert_value(&mut app, "source", 0.0);
+    assert_value(&mut app, "middle", 2.0);
+    assert_value(&mut app, "target", 8.0);
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn immediate_fan_in_adds_changes_from_both_paths() {
 
     change(&mut app, "source", 2.0);
 
-    assert_value(&app, "target", 20.0);
+    assert_value(&mut app, "target", 20.0);
 }
 
 #[test]
@@ -227,10 +227,10 @@ fn annual_recalculation_replaces_the_value() {
     ]);
 
     change(&mut app, "source", 2.0);
-    assert_value(&app, "target", 999.0);
+    assert_value(&mut app, "target", 999.0);
     advance_months(&mut app, 12);
 
-    assert_value(&app, "target", 18.0);
+    assert_value(&mut app, "target", 18.0);
     assert_date(&app, 2, 1);
 }
 
@@ -254,11 +254,11 @@ fn annual_recalculation_sums_multiple_sources_and_applies_bounds() {
     ]);
 
     advance_months(&mut app, 12);
-    assert_value(&app, "target", 15.0);
+    assert_value(&mut app, "target", 15.0);
 
     change(&mut app, "left", -20.0);
     advance_months(&mut app, 12);
-    assert_value(&app, "target", 0.0);
+    assert_value(&mut app, "target", 0.0);
 }
 
 #[test]
@@ -271,8 +271,8 @@ fn annual_actual_delta_triggers_immediate_propagation() {
 
     advance_months(&mut app, 12);
 
-    assert_value(&app, "annual", 20.0);
-    assert_value(&app, "target", 90.0);
+    assert_value(&mut app, "annual", 20.0);
+    assert_value(&mut app, "target", 90.0);
 }
 
 #[test]
@@ -286,9 +286,9 @@ fn bounded_annual_result_propagates_its_actual_delta_through_multiple_layers() {
 
     advance_months(&mut app, 12);
 
-    assert_value(&app, "annual", 10.0);
-    assert_value(&app, "middle", 30.0);
-    assert_value(&app, "target", 6.0);
+    assert_value(&mut app, "annual", 10.0);
+    assert_value(&mut app, "middle", 30.0);
+    assert_value(&mut app, "target", 6.0);
 }
 
 #[test]
@@ -301,7 +301,7 @@ fn unchanged_annual_result_does_not_change_immediate_dependents() {
 
     advance_months(&mut app, 24);
 
-    assert_value(&app, "target", 7.0);
+    assert_value(&mut app, "target", 7.0);
 }
 
 #[test]
@@ -318,8 +318,8 @@ fn annual_metrics_use_the_same_source_snapshot_in_either_definition_order() {
 
         advance_months(&mut app, 12);
 
-        assert_value(&app, "first", 20.0);
-        assert_value(&app, "second", 21.0);
+        assert_value(&mut app, "first", 20.0);
+        assert_value(&mut app, "second", 21.0);
     }
 }
 
@@ -332,8 +332,8 @@ fn annual_cycles_are_allowed_and_read_pre_settlement_values() {
 
     advance_months(&mut app, 12);
 
-    assert_value(&app, "left", 6.0);
-    assert_value(&app, "right", 8.0);
+    assert_value(&mut app, "left", 6.0);
+    assert_value(&mut app, "right", 8.0);
 }
 
 #[test]
@@ -347,8 +347,8 @@ fn annual_inputs_are_snapshotted_before_settlement_propagation() {
 
     advance_months(&mut app, 12);
 
-    assert_value(&app, "intermediate", 25.0);
-    assert_value(&app, "second", 15.0);
+    assert_value(&mut app, "intermediate", 25.0);
+    assert_value(&mut app, "second", 15.0);
 }
 
 #[test]
@@ -360,11 +360,11 @@ fn annual_settlement_occurs_only_when_month_twelve_wraps() {
 
     advance_months(&mut app, 11);
     assert_date(&app, 1, 12);
-    assert_value(&app, "annual", 0.0);
+    assert_value(&mut app, "annual", 0.0);
 
     advance_months(&mut app, 1);
     assert_date(&app, 2, 1);
-    assert_value(&app, "annual", 40.0);
+    assert_value(&mut app, "annual", 40.0);
 
     advance_months(&mut app, 1);
     assert_date(&app, 2, 2);
@@ -429,19 +429,19 @@ fn collapse_at_one_hundred_resets_every_metric_and_the_date() {
     ]);
     change(&mut app, "source", 5.0);
     advance_months(&mut app, 12);
-    assert_value(&app, "target", 22.0);
+    assert_value(&mut app, "target", 22.0);
     assert_date(&app, 2, 1);
 
     change(&mut app, COLLAPSE_METRIC_ID, 99.0);
-    assert_value(&app, COLLAPSE_METRIC_ID, 99.0);
+    assert_value(&mut app, COLLAPSE_METRIC_ID, 99.0);
     assert_date(&app, 2, 1);
 
     change(&mut app, COLLAPSE_METRIC_ID, 1.0);
 
-    assert_value(&app, "source", 10.0);
-    assert_value(&app, "annual", 0.0);
-    assert_value(&app, "target", 7.0);
-    assert_value(&app, COLLAPSE_METRIC_ID, 0.0);
+    assert_value(&mut app, "source", 10.0);
+    assert_value(&mut app, "annual", 0.0);
+    assert_value(&mut app, "target", 7.0);
+    assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
     assert_date(&app, 1, 1);
 }
 
@@ -459,9 +459,9 @@ fn collapse_triggered_by_immediate_propagation_resets_the_run() {
 
     change(&mut app, "source", 15.0);
 
-    assert_value(&app, "source", 0.0);
-    assert_value(&app, COLLAPSE_METRIC_ID, 0.0);
-    assert_value(&app, "target", 5.0);
+    assert_value(&mut app, "source", 0.0);
+    assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
+    assert_value(&mut app, "target", 5.0);
     assert_date(&app, 1, 1);
 }
 
@@ -479,9 +479,9 @@ fn collapse_triggered_by_annual_settlement_resets_the_run() {
 
     advance_months(&mut app, 12);
 
-    assert_value(&app, "source", 50.0);
-    assert_value(&app, COLLAPSE_METRIC_ID, 0.0);
-    assert_value(&app, "target", 7.0);
+    assert_value(&mut app, "source", 50.0);
+    assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
+    assert_value(&mut app, "target", 7.0);
     assert_date(&app, 1, 1);
 }
 
@@ -501,11 +501,11 @@ fn collapse_triggered_by_an_annual_delta_stops_remaining_settlement_work() {
 
     advance_months(&mut app, 12);
 
-    assert_value(&app, "source", 50.0);
-    assert_value(&app, "annual", 0.0);
-    assert_value(&app, COLLAPSE_METRIC_ID, 0.0);
-    assert_value(&app, "later_annual", 7.0);
-    assert_value(&app, "target", 5.0);
+    assert_value(&mut app, "source", 50.0);
+    assert_value(&mut app, "annual", 0.0);
+    assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
+    assert_value(&mut app, "later_annual", 7.0);
+    assert_value(&mut app, "target", 5.0);
     assert_date(&app, 1, 1);
 }
 
@@ -535,8 +535,8 @@ fn collapse_discards_remaining_actions_from_the_previous_run() {
         ],
     );
 
-    assert_value(&app, "source", 10.0);
-    assert_value(&app, COLLAPSE_METRIC_ID, 0.0);
+    assert_value(&mut app, "source", 10.0);
+    assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
     assert_date(&app, 1, 1);
     assert!(app.world().resource::<PendingActions>().0.is_empty());
 }
@@ -582,8 +582,8 @@ fn ron_supports_omitted_optional_fields_and_both_influence_kinds() {
     change(&mut app, "source", 2.0);
     advance_months(&mut app, 12);
 
-    assert_value(&app, "immediate", 4.0);
-    assert_value(&app, "annual", 12.0);
+    assert_value(&mut app, "immediate", 4.0);
+    assert_value(&mut app, "annual", 12.0);
 }
 
 #[test]
@@ -594,12 +594,12 @@ fn repository_ron_asset_loads_and_runs_the_example_loop() {
     app.add_plugins(MinimalPlugins).add_plugins(plugin);
     app.update();
 
-    assert_value(&app, "productivity", 10.0);
-    assert_value(&app, "output", 20.0);
+    assert_value(&mut app, "productivity", 10.0);
+    assert_value(&mut app, "output", 20.0);
     change(&mut app, "productivity", 5.0);
-    assert_value(&app, "output", 30.0);
+    assert_value(&mut app, "output", 30.0);
     advance_months(&mut app, 12);
-    assert_value(&app, "income", 45.0);
-    assert_value(&app, "reserves", 72.5);
+    assert_value(&mut app, "income", 45.0);
+    assert_value(&mut app, "reserves", 72.5);
     assert_date(&app, 2, 1);
 }
