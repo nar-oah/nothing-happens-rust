@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
-    fmt,
-    fs,
+    fmt, fs,
     path::Path,
 };
 
@@ -188,8 +187,8 @@ impl MetricPlugin {
     }
 
     pub fn from_ron(contents: &str) -> Result<Self, MetricError> {
-        let definitions = ron::from_str(contents)
-            .map_err(|error| MetricError::InvalidRon(error.to_string()))?;
+        let definitions =
+            ron::from_str(contents).map_err(|error| MetricError::InvalidRon(error.to_string()))?;
         Self::new(definitions)
     }
 

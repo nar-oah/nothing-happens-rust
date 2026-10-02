@@ -2,7 +2,8 @@ use bevy::{app::AppExit, prelude::*};
 use nothing_happens::{debug_ui::DebugUiPlugin, metrics::MetricPlugin};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let metrics = MetricPlugin::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/metrics.ron"))?;
+    let metrics =
+        MetricPlugin::from_path(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/metrics.ron"))?;
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {

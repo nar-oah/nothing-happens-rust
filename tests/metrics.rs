@@ -270,11 +270,7 @@ fn annual_actual_delta_triggers_immediate_propagation() {
 fn bounded_annual_result_propagates_its_actual_delta_through_multiple_layers() {
     let mut app = app_with(vec![
         definition("source", 30.0, None),
-        bounded(
-            definition("annual", 5.0, annual("source", 2.0)),
-            0.0,
-            10.0,
-        ),
+        bounded(definition("annual", 5.0, annual("source", 2.0)), 0.0, 10.0),
         definition("middle", 20.0, immediate("annual", 2.0)),
         definition("target", 1.0, immediate("middle", 0.5)),
     ]);
@@ -377,11 +373,7 @@ fn duplicate_metric_ids_are_rejected_before_startup() {
 
 #[test]
 fn missing_immediate_source_is_rejected_before_startup() {
-    let result = MetricPlugin::new(vec![definition(
-        "target",
-        0.0,
-        immediate("missing", 1.0),
-    )]);
+    let result = MetricPlugin::new(vec![definition("target", 0.0, immediate("missing", 1.0))]);
 
     assert!(matches!(
         result,
@@ -392,11 +384,7 @@ fn missing_immediate_source_is_rejected_before_startup() {
 
 #[test]
 fn missing_annual_source_is_rejected_before_startup() {
-    let result = MetricPlugin::new(vec![definition(
-        "target",
-        0.0,
-        annual("missing", 1.0),
-    )]);
+    let result = MetricPlugin::new(vec![definition("target", 0.0, annual("missing", 1.0))]);
 
     assert!(matches!(
         result,
@@ -417,11 +405,7 @@ fn immediate_cycle_is_rejected_before_startup() {
 
 #[test]
 fn immediate_self_dependency_is_rejected_before_startup() {
-    let result = MetricPlugin::new(vec![definition(
-        "self",
-        0.0,
-        immediate("self", 1.0),
-    )]);
+    let result = MetricPlugin::new(vec![definition("self", 0.0, immediate("self", 1.0))]);
 
     assert!(matches!(result, Err(MetricError::ImmediateCycle(_))));
 }

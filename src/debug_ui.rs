@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 
 use crate::metrics::{
-    GameAction, GameDate, GameStatus, Influence, Metric, MetricEntities, PendingActions, SimulationSet,
+    GameAction, GameDate, GameStatus, Influence, Metric, MetricEntities, PendingActions,
+    SimulationSet,
 };
 
 pub struct DebugUiPlugin;
