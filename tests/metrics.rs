@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use nothing_happens::metrics::{
     AnnualInfluence, COLLAPSE_METRIC_ID, CollapseMetric, GameAction, GameDate, ImmediateInfluence,
     Influence, InfluenceTerm, InitialValue, Metric, MetricBounds, MetricDefinition, MetricError,
-    MetricId, MetricMetadata, MetricOrder, MetricPlugin, MetricValue, PendingActions, SimulationSet,
+    MetricId, MetricMetadata, MetricOrder, MetricPlugin, MetricValue, PendingActions,
+    SimulationSet,
 };
 
 fn definition(id: &str, value: f64, influence: Option<Influence>) -> MetricDefinition {
@@ -158,20 +159,17 @@ fn startup_exposes_metric_data_and_entity_influences_as_distinct_components() {
     ]);
 
     let world = app.world_mut();
-    let mut query = world.query_filtered::<
-        (
-            &MetricId,
-            &MetricMetadata,
-            &MetricValue,
-            &InitialValue,
-            &MetricBounds,
-            &MetricOrder,
-            Has<ImmediateInfluence>,
-            Has<AnnualInfluence>,
-            Has<CollapseMetric>,
-        ),
-        With<Metric>,
-    >();
+    let mut query = world.query_filtered::<(
+        &MetricId,
+        &MetricMetadata,
+        &MetricValue,
+        &InitialValue,
+        &MetricBounds,
+        &MetricOrder,
+        Has<ImmediateInfluence>,
+        Has<AnnualInfluence>,
+        Has<CollapseMetric>,
+    ), With<Metric>>();
     let mut metrics = Vec::new();
     for (id, metadata, value, initial, bounds, order, immediate, annual, collapse) in
         query.iter(world)
@@ -317,8 +315,10 @@ fn idle_and_unrelated_actions_do_not_mark_untouched_metric_values_changed() {
         definition("target", 5.0, immediate("source", 2.0)),
         definition("untouched", 42.0, None),
     ]);
-    app.init_resource::<ChangedMetrics>()
-        .add_systems(Update, record_changed_metrics.after(SimulationSet::ApplyActions));
+    app.init_resource::<ChangedMetrics>().add_systems(
+        Update,
+        record_changed_metrics.after(SimulationSet::ApplyActions),
+    );
     app.update();
     app.update();
     assert!(app.world().resource::<ChangedMetrics>().0.is_empty());
