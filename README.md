@@ -46,4 +46,4 @@ cargo run
 
 逻辑位于 `src/metrics.rs`，UI 位于 `src/debug_ui.rs`；测试使用 Bevy `MinimalPlugins`，无需窗口和显卡即可验证模拟规则。
 
-其他系统可直接通过 `Query<(&MetricId, &mut MetricValue), With<Metric>>` 修改当前值，并将写入系统安排在 `SimulationSet::ObserveChanges` 之前。模拟系统通过每个 Entity 的上次已传播值计算实际 delta，应用边界并触发 Immediate 传播。重置通过 `InitialValue` 恢复指标；运行时不保留 RON 定义副本或全局指标数值数组。
+其他系统可直接通过 `Query<(&MetricId, &mut MetricValue), With<Metric>>` 修改当前值，并将写入系统安排在 `SimulationSet::ObserveChanges` 之前。模拟系统通过每个 Entity 的上次已传播值计算实际 delta，应用边界并触发 Immediate 传播。重置通过 `InitialValue` 恢复指标；`World` 中不保留 RON 定义副本或全局指标数值数组。
