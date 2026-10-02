@@ -171,7 +171,7 @@ fn target_maximum_limits_the_delta_propagated_to_the_next_layer() {
 }
 
 #[test]
-fn_source_and_target_minimums_limit_negative_propagation() {
+fn source_and_target_minimums_limit_negative_propagation() {
     let mut app = app_with(vec![
         bounded(definition("source", 4.0, None), 0.0, 100.0),
         bounded(
