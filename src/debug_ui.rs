@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
 use crate::metrics::{
-    AnnualInfluence, GameAction, GameDate, GameStatus, ImmediateInfluence, Metric, MetricCatalog,
-    MetricId, MetricMetadata, MetricOrder, MetricReady, MetricValue, PendingActions, SimulationSet,
+    AnnualInfluence, GameAction, GameDate, GameStatus, ImmediateInfluence, Metric, MetricId,
+    MetricMetadata, MetricOrder, MetricReady, MetricValue, PendingActions, SimulationSet,
 };
 
 pub struct DebugUiPlugin;
@@ -14,7 +14,7 @@ impl Plugin for DebugUiPlugin {
             setup_ui.run_if(resource_added::<MetricReady>),
         )
         .add_systems(Update, handle_buttons.before(SimulationSet::ApplyActions))
-            .add_systems(Update, refresh_labels.after(SimulationSet::ApplyActions));
+        .add_systems(Update, refresh_labels.after(SimulationSet::ApplyActions));
     }
 }
 
@@ -222,7 +222,7 @@ fn refresh_labels(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::MetricPlugin;
+    use crate::metrics::{MetricCatalog, MetricPlugin};
 
     fn press(app: &mut App, action: GameAction) {
         let world = app.world_mut();
