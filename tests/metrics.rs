@@ -825,9 +825,8 @@ fn ron_supports_omitted_optional_fields_and_both_influence_kinds() {
 
 #[test]
 fn repository_metric_catalog_parses_and_runs_the_example_loop() {
-    let catalog: MetricCatalog =
-        ron::from_str(include_str!("../assets/data/metrics.metric.ron"))
-            .expect("repository metric catalog is valid");
+    let catalog: MetricCatalog = ron::from_str(include_str!("../assets/data/metrics.metric.ron"))
+        .expect("repository metric catalog is valid");
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .add_plugins(MetricPlugin::new(catalog.metrics).unwrap());

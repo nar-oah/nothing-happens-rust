@@ -6,10 +6,8 @@ use std::{collections::HashMap, fmt};
 
 use bevy::{asset::AssetApp, prelude::*};
 
-pub use asset::{
-    validate_definitions, Influence, InfluenceTerm, MetricCatalog, MetricDefinition,
-};
 use asset::MetricCatalogLoader;
+pub use asset::{Influence, InfluenceTerm, MetricCatalog, MetricDefinition, validate_definitions};
 pub use components::*;
 pub use simulation::*;
 

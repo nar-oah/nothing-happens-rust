@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use bevy::prelude::*;
 
-use super::{components::*, MetricError};
+use super::{MetricError, components::*};
 
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GameDate {

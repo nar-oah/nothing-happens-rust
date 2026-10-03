@@ -9,12 +9,9 @@ pub struct DebugUiPlugin;
 
 impl Plugin for DebugUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            setup_ui.run_if(resource_added::<MetricReady>),
-        )
-        .add_systems(Update, handle_buttons.before(SimulationSet::ApplyActions))
-        .add_systems(Update, refresh_labels.after(SimulationSet::ApplyActions));
+        app.add_systems(Update, setup_ui.run_if(resource_added::<MetricReady>))
+            .add_systems(Update, handle_buttons.before(SimulationSet::ApplyActions))
+            .add_systems(Update, refresh_labels.after(SimulationSet::ApplyActions));
     }
 }
 
