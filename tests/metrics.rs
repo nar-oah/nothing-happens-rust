@@ -1,10 +1,26 @@
-use bevy::prelude::*;
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
+
+use bevy::{
+    asset::{
+        AssetApp, AssetPlugin, LoadState,
+        io::{
+            AssetSourceBuilder, AssetSourceId,
+            memory::{Dir, MemoryAssetReader},
+        },
+    },
+    prelude::*,
+};
 use nothing_happens::metrics::{
     AnnualInfluence, COLLAPSE_METRIC_ID, CollapseMetric, GameAction, GameDate, ImmediateInfluence,
     Influence, InfluenceTerm, InitialValue, Metric, MetricBounds, MetricCatalog, MetricDefinition,
-    MetricError, MetricId, MetricMetadata, MetricOrder, MetricPlugin, MetricValue, PendingActions,
-    SimulationSet,
+    MetricError, MetricId, MetricMetadata, MetricOrder, MetricPlugin, MetricReady, MetricValue,
+    PendingActions, SimulationSet, validate_definitions,
 };
+
+const METRIC_CATALOG_PATH: &str = "data/metrics.metric.ron";
 
 fn definition(id: &str, value: f64, influence: Option<Influence>) -> MetricDefinition {
     MetricDefinition {
@@ -39,12 +55,47 @@ fn annual(source: &str, factor: f64) -> Option<Influence> {
     Some(Influence::Annual(vec![term(source, factor)]))
 }
 
-fn app_with(definitions: Vec<MetricDefinition>) -> App {
+fn catalog_app(catalog: &str) -> App {
+    let dir = Dir::default();
+    dir.insert_asset_text(Path::new(METRIC_CATALOG_PATH), catalog);
+
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
-        .add_plugins(MetricPlugin::new(definitions).expect("valid metric definitions"));
-    app.update();
+        .register_asset_source(
+            AssetSourceId::Default,
+            AssetSourceBuilder::new(move || Box::new(MemoryAssetReader { root: dir.clone() })),
+        )
+        .add_plugins((AssetPlugin::default(), MetricPlugin));
     app
+}
+
+fn update_until(app: &mut App, ready: impl Fn(&World) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        app.update();
+        if ready(app.world()) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "metric catalog did not load in time"
+        );
+        std::thread::yield_now();
+    }
+}
+
+fn app_with_catalog(catalog: &str) -> App {
+    let mut app = catalog_app(catalog);
+    update_until(&mut app, |world| world.contains_resource::<MetricReady>());
+    app
+}
+
+fn app_with(definitions: Vec<MetricDefinition>) -> App {
+    let catalog = ron::to_string(&MetricCatalog {
+        metrics: definitions,
+    })
+    .expect("metric catalog serializes");
+    app_with_catalog(&catalog)
 }
 
 fn act(app: &mut App, actions: impl IntoIterator<Item = GameAction>) {
@@ -522,8 +573,8 @@ fn unchanged_annual_result_does_not_change_immediate_dependents() {
 }
 
 #[test]
-fn annual_source_is_rejected_before_startup() {
-    let result = MetricPlugin::new(vec![
+fn annual_source_is_rejected_during_validation() {
+    let result = validate_definitions(&[
         definition("source", 10.0, None),
         definition("first", 7.0, annual("source", 2.0)),
         definition("second", 2.0, annual("first", 3.0)),
@@ -538,7 +589,7 @@ fn annual_source_is_rejected_before_startup() {
 
 #[test]
 fn annual_source_is_rejected_even_when_declared_after_its_target() {
-    let result = MetricPlugin::new(vec![
+    let result = validate_definitions(&[
         definition("second", 2.0, annual("first", 3.0)),
         definition("first", 7.0, annual("source", 2.0)),
         definition("source", 10.0, None),
@@ -552,8 +603,8 @@ fn annual_source_is_rejected_even_when_declared_after_its_target() {
 }
 
 #[test]
-fn annual_self_dependency_is_rejected_before_startup() {
-    let result = MetricPlugin::new(vec![definition("self", 2.0, annual("self", 2.0))]);
+fn annual_self_dependency_is_rejected_during_validation() {
+    let result = validate_definitions(&[definition("self", 2.0, annual("self", 2.0))]);
 
     assert!(matches!(
         result,
@@ -563,8 +614,8 @@ fn annual_self_dependency_is_rejected_before_startup() {
 }
 
 #[test]
-fn annual_cycle_is_rejected_before_startup() {
-    let result = MetricPlugin::new(vec![
+fn annual_cycle_is_rejected_during_validation() {
+    let result = validate_definitions(&[
         definition("first", 2.0, annual("third", 2.0)),
         definition("second", 3.0, annual("first", 3.0)),
         definition("third", 4.0, annual("second", 4.0)),
@@ -608,8 +659,8 @@ fn annual_settlement_occurs_only_when_month_twelve_wraps() {
 }
 
 #[test]
-fn duplicate_metric_ids_are_rejected_before_startup() {
-    let result = MetricPlugin::new(vec![
+fn duplicate_metric_ids_are_rejected_during_validation() {
+    let result = validate_definitions(&[
         definition("duplicate", 0.0, None),
         definition("duplicate", 1.0, None),
     ]);
@@ -618,8 +669,8 @@ fn duplicate_metric_ids_are_rejected_before_startup() {
 }
 
 #[test]
-fn missing_immediate_source_is_rejected_before_startup() {
-    let result = MetricPlugin::new(vec![definition("target", 0.0, immediate("missing", 1.0))]);
+fn missing_immediate_source_is_rejected_during_validation() {
+    let result = validate_definitions(&[definition("target", 0.0, immediate("missing", 1.0))]);
 
     assert!(matches!(
         result,
@@ -629,8 +680,8 @@ fn missing_immediate_source_is_rejected_before_startup() {
 }
 
 #[test]
-fn missing_annual_source_is_rejected_before_startup() {
-    let result = MetricPlugin::new(vec![definition("target", 0.0, annual("missing", 1.0))]);
+fn missing_annual_source_is_rejected_during_validation() {
+    let result = validate_definitions(&[definition("target", 0.0, annual("missing", 1.0))]);
 
     assert!(matches!(
         result,
@@ -640,8 +691,8 @@ fn missing_annual_source_is_rejected_before_startup() {
 }
 
 #[test]
-fn immediate_cycle_is_rejected_before_startup() {
-    let result = MetricPlugin::new(vec![
+fn immediate_cycle_is_rejected_during_validation() {
+    let result = validate_definitions(&[
         definition("left", 0.0, immediate("right", 1.0)),
         definition("right", 0.0, immediate("left", 1.0)),
     ]);
@@ -650,8 +701,8 @@ fn immediate_cycle_is_rejected_before_startup() {
 }
 
 #[test]
-fn immediate_self_dependency_is_rejected_before_startup() {
-    let result = MetricPlugin::new(vec![definition("self", 0.0, immediate("self", 1.0))]);
+fn immediate_self_dependency_is_rejected_during_validation() {
+    let result = validate_definitions(&[definition("self", 0.0, immediate("self", 1.0))]);
 
     assert!(matches!(result, Err(MetricError::ImmediateCycle(_))));
 }
@@ -780,8 +831,7 @@ fn collapse_discards_remaining_actions_from_the_previous_run() {
 
 #[test]
 fn ron_supports_omitted_optional_fields_and_both_influence_kinds() {
-    let definitions: Vec<MetricDefinition> = ron::from_str(
-        r#"[
+    let catalog_ron = r#"(metrics: [
             (
                 id: "source",
                 name: "来源",
@@ -808,13 +858,12 @@ fn ron_supports_omitted_optional_fields_and_both_influence_kinds() {
                     (source_metric: "immediate", factor: 3.0),
                 ])),
             ),
-        ]"#,
-    )
-    .expect("RON definitions deserialize");
-    assert!(definitions[0].min_value.is_none());
-    assert!(definitions[0].max_value.is_none());
-    assert!(definitions[0].influence.is_none());
-    let mut app = app_with(definitions);
+        ])"#;
+    let catalog: MetricCatalog = ron::from_str(catalog_ron).expect("RON catalog deserializes");
+    assert!(catalog.metrics[0].min_value.is_none());
+    assert!(catalog.metrics[0].max_value.is_none());
+    assert!(catalog.metrics[0].influence.is_none());
+    let mut app = app_with_catalog(catalog_ron);
 
     change(&mut app, "source", 2.0);
     advance_months(&mut app, 12);
@@ -825,12 +874,7 @@ fn ron_supports_omitted_optional_fields_and_both_influence_kinds() {
 
 #[test]
 fn repository_metric_catalog_parses_and_runs_the_example_loop() {
-    let catalog: MetricCatalog = ron::from_str(include_str!("../assets/data/metrics.metric.ron"))
-        .expect("repository metric catalog is valid");
-    let mut app = App::new();
-    app.add_plugins(MinimalPlugins)
-        .add_plugins(MetricPlugin::new(catalog.metrics).unwrap());
-    app.update();
+    let mut app = app_with_catalog(include_str!("../assets/data/metrics.metric.ron"));
 
     assert_value(&mut app, "productivity", 10.0);
     assert_value(&mut app, "output", 20.0);
@@ -840,4 +884,44 @@ fn repository_metric_catalog_parses_and_runs_the_example_loop() {
     assert_value(&mut app, "income", 45.0);
     assert_value(&mut app, "reserves", 72.5);
     assert_date(&app, 2, 1);
+}
+
+#[test]
+fn invalid_metric_catalog_fails_to_load_without_spawning_metrics() {
+    let catalog = ron::to_string(&MetricCatalog {
+        metrics: vec![
+            definition("duplicate", 0.0, None),
+            definition("duplicate", 1.0, None),
+        ],
+    })
+    .unwrap();
+    let mut app = catalog_app(&catalog);
+    let handle: Handle<MetricCatalog> = app
+        .world()
+        .resource::<AssetServer>()
+        .load(METRIC_CATALOG_PATH);
+    update_until(&mut app, |world| {
+        world
+            .resource::<AssetServer>()
+            .load_state(handle.id())
+            .is_failed()
+    });
+
+    let LoadState::Failed(error) = app
+        .world()
+        .resource::<AssetServer>()
+        .load_state(handle.id())
+    else {
+        panic!("invalid metric catalog must fail to load");
+    };
+    assert!(error.to_string().contains("duplicate metric id: duplicate"));
+    assert!(!app.world().contains_resource::<MetricReady>());
+    let world = app.world_mut();
+    assert_eq!(
+        world
+            .query_filtered::<Entity, With<Metric>>()
+            .iter(world)
+            .count(),
+        0
+    );
 }

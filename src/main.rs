@@ -12,7 +12,7 @@ fn main() {
             ..default()
         }))
         .insert_resource(ClearColor(Color::srgb(0.06, 0.07, 0.09)))
-        .add_plugins((MetricPlugin::default(), DebugUiPlugin))
+        .add_plugins((MetricPlugin, DebugUiPlugin))
         .add_systems(Update, exit_on_escape)
         .run();
 }

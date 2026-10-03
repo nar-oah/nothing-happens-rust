@@ -218,8 +218,12 @@ fn refresh_labels(
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
+    use bevy::asset::AssetPlugin;
+
     use super::*;
-    use crate::metrics::{MetricCatalog, MetricPlugin};
+    use crate::metrics::MetricPlugin;
 
     fn press(app: &mut App, action: GameAction) {
         let world = app.world_mut();
@@ -244,13 +248,22 @@ mod tests {
 
     #[test]
     fn buttons_run_the_loop_and_refresh_labels_in_the_same_frame() {
-        let catalog: MetricCatalog =
-            ron::from_str(include_str!("../assets/data/metrics.metric.ron")).unwrap();
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_plugins((MetricPlugin::new(catalog.metrics).unwrap(), DebugUiPlugin));
-        app.update();
-        assert!(displays(&mut app, "Year 1 / Month 1"));
+            .add_plugins(AssetPlugin {
+                file_path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets").into(),
+                ..default()
+            })
+            .add_plugins((MetricPlugin, DebugUiPlugin));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            app.update();
+            if displays(&mut app, "Year 1 / Month 1") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "metric UI did not load in time");
+            std::thread::yield_now();
+        }
 
         press(
             &mut app,

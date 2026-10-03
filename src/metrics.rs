@@ -62,29 +62,11 @@ impl std::error::Error for MetricError {}
 struct MetricCatalogHandle(Handle<MetricCatalog>);
 
 #[derive(Default)]
-pub struct MetricPlugin {
-    definitions: Option<Vec<MetricDefinition>>,
-}
-
-impl MetricPlugin {
-    /// Direct definitions are kept for tests and tools that do not run an AssetServer.
-    pub fn new(definitions: Vec<MetricDefinition>) -> Result<Self, MetricError> {
-        validate_definitions(&definitions)?;
-        Ok(Self {
-            definitions: Some(definitions),
-        })
-    }
-}
+pub struct MetricPlugin;
 
 impl Plugin for MetricPlugin {
     fn build(&self, app: &mut App) {
         simulation::configure_simulation(app);
-
-        if let Some(definitions) = &self.definitions {
-            spawn_metric_entities(app.world_mut(), definitions);
-            app.world_mut().insert_resource(MetricReady);
-            return;
-        }
 
         app.init_asset::<MetricCatalog>()
             .init_asset_loader::<MetricCatalogLoader>()
