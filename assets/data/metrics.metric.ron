@@ -1,0 +1,53 @@
+(
+    metrics: [
+        (
+            id: "productivity",
+            name: "生产力",
+            description: "测试源指标；每变化 1 点，产出立即变化 2 点。",
+            initial_value: 10.0,
+            min_value: Some(0.0),
+            max_value: Some(100.0),
+        ),
+        (
+            id: "output",
+            name: "产出",
+            description: "立即受生产力影响，上限 120；年末用于计算收入。",
+            initial_value: 20.0,
+            min_value: Some(0.0),
+            max_value: Some(120.0),
+            influence: Some(Immediate([
+                (source_metric: "productivity", factor: 2.0),
+            ])),
+        ),
+        (
+            id: "income",
+            name: "年收入",
+            description: "年末重算为当前产出 × 1.5；实际变化立即影响储备。",
+            initial_value: 0.0,
+            min_value: Some(0.0),
+            max_value: Some(200.0),
+            influence: Some(Annual([
+                (source_metric: "output", factor: 1.5),
+            ])),
+        ),
+        (
+            id: "reserves",
+            name: "储备",
+            description: "收入每实际变化 1 点，储备立即变化 0.5 点。",
+            initial_value: 50.0,
+            min_value: Some(0.0),
+            max_value: Some(500.0),
+            influence: Some(Immediate([
+                (source_metric: "income", factor: 0.5),
+            ])),
+        ),
+        (
+            id: "collapse",
+            name: "崩溃度",
+            description: "达到 100 时重新开始；指标和时间恢复初始状态。",
+            initial_value: 0.0,
+            min_value: Some(0.0),
+            max_value: Some(100.0),
+        ),
+    ],
+)

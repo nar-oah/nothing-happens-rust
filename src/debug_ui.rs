@@ -1,16 +1,19 @@
 use bevy::prelude::*;
 
 use crate::metrics::{
-    AnnualInfluence, GameAction, GameDate, GameStatus, ImmediateInfluence, Metric, MetricId,
-    MetricMetadata, MetricOrder, MetricValue, PendingActions, SimulationSet,
+    AnnualInfluence, GameAction, GameDate, GameStatus, ImmediateInfluence, Metric, MetricCatalog,
+    MetricId, MetricMetadata, MetricOrder, MetricReady, MetricValue, PendingActions, SimulationSet,
 };
 
 pub struct DebugUiPlugin;
 
 impl Plugin for DebugUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostStartup, setup_ui)
-            .add_systems(Update, handle_buttons.before(SimulationSet::ApplyActions))
+        app.add_systems(
+            Update,
+            setup_ui.run_if(resource_added::<MetricReady>),
+        )
+        .add_systems(Update, handle_buttons.before(SimulationSet::ApplyActions))
             .add_systems(Update, refresh_labels.after(SimulationSet::ApplyActions));
     }
 }
@@ -244,11 +247,11 @@ mod tests {
 
     #[test]
     fn buttons_run_the_loop_and_refresh_labels_in_the_same_frame() {
+        let catalog: MetricCatalog =
+            ron::from_str(include_str!("../assets/data/metrics.metric.ron")).unwrap();
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).add_plugins((
-            MetricPlugin::from_ron(include_str!("../assets/metrics.ron")).unwrap(),
-            DebugUiPlugin,
-        ));
+        app.add_plugins(MinimalPlugins)
+            .add_plugins((MetricPlugin::new(catalog.metrics).unwrap(), DebugUiPlugin));
         app.update();
         assert!(displays(&mut app, "Year 1 / Month 1"));
 

@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use nothing_happens::metrics::{
     AnnualInfluence, COLLAPSE_METRIC_ID, CollapseMetric, GameAction, GameDate, ImmediateInfluence,
-    Influence, InfluenceTerm, InitialValue, Metric, MetricBounds, MetricDefinition, MetricError,
-    MetricId, MetricMetadata, MetricOrder, MetricPlugin, MetricValue, PendingActions,
+    Influence, InfluenceTerm, InitialValue, Metric, MetricBounds, MetricCatalog, MetricDefinition,
+    MetricError, MetricId, MetricMetadata, MetricOrder, MetricPlugin, MetricValue, PendingActions,
     SimulationSet,
 };
 
@@ -824,11 +824,13 @@ fn ron_supports_omitted_optional_fields_and_both_influence_kinds() {
 }
 
 #[test]
-fn repository_ron_asset_loads_and_runs_the_example_loop() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/metrics.ron");
-    let plugin = MetricPlugin::from_path(path).expect("repository RON asset is valid");
+fn repository_metric_catalog_parses_and_runs_the_example_loop() {
+    let catalog: MetricCatalog =
+        ron::from_str(include_str!("../assets/data/metrics.metric.ron"))
+            .expect("repository metric catalog is valid");
     let mut app = App::new();
-    app.add_plugins(MinimalPlugins).add_plugins(plugin);
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(MetricPlugin::new(catalog.metrics).unwrap());
     app.update();
 
     assert_value(&mut app, "productivity", 10.0);
