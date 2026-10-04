@@ -1,6 +1,28 @@
 (
     metrics: [
         (
+            id: "year",
+            name: "年份",
+            description: "跨年时增加 1；重开时恢复为 1。",
+            initial_value: 1.0,
+            min_value: Some(1.0),
+        ),
+        (
+            id: "month",
+            name: "月份",
+            description: "每次推进增加 1；超过 12 时归 1 并跨年结算。",
+            initial_value: 1.0,
+            min_value: Some(1.0),
+            max_value: Some(12.0),
+        ),
+        (
+            id: "term",
+            name: "任期",
+            description: "从 1 开始；每次崩溃重开增加 1。",
+            initial_value: 1.0,
+            min_value: Some(1.0),
+        ),
+        (
             id: "productivity",
             name: "生产力",
             description: "测试源指标；每变化 1 点，产出立即变化 2 点。",
@@ -44,7 +66,7 @@
         (
             id: "collapse",
             name: "崩溃度",
-            description: "达到 100 时重新开始；指标和时间恢复初始状态。",
+            description: "达到 100 时重开；普通指标恢复初始值，年份月份归 1，任期加 1。",
             initial_value: 0.0,
             min_value: Some(0.0),
             max_value: Some(100.0),

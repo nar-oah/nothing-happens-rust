@@ -14,10 +14,11 @@ use bevy::{
     prelude::*,
 };
 use nothing_happens::metrics::{
-    AnnualInfluence, COLLAPSE_METRIC_ID, CollapseMetric, GameAction, GameDate, ImmediateInfluence,
-    Influence, InfluenceTerm, InitialValue, Metric, MetricBounds, MetricCatalog, MetricDefinition,
-    MetricError, MetricId, MetricMetadata, MetricOrder, MetricPlugin, MetricReady, MetricValue,
-    PendingActions, SimulationSet, validate_definitions,
+    AnnualInfluence, COLLAPSE_METRIC_ID, CollapseMetric, ImmediateInfluence, Influence,
+    InfluenceTerm, InitialValue, MONTH_METRIC_ID, Metric, MetricBounds, MetricCatalog,
+    MetricChange, MetricDefinition, MetricError, MetricId, MetricMetadata, MetricOrder,
+    MetricPlugin, MetricReady, MetricValue, PendingMetricChanges, PendingMonthAdvances,
+    SimulationSet, TERM_METRIC_ID, YEAR_METRIC_ID, validate_definitions,
 };
 
 const METRIC_CATALOG_PATH: &str = "data/metrics.metric.ron";
@@ -90,7 +91,19 @@ fn app_with_catalog(catalog: &str) -> App {
     app
 }
 
-fn app_with(definitions: Vec<MetricDefinition>) -> App {
+fn app_with(mut definitions: Vec<MetricDefinition>) -> App {
+    for (id, max) in [
+        (YEAR_METRIC_ID, None),
+        (MONTH_METRIC_ID, Some(12.0)),
+        (TERM_METRIC_ID, None),
+    ] {
+        if !definitions.iter().any(|metric| metric.id == id) {
+            let mut metric = definition(id, 1.0, None);
+            metric.min_value = Some(1.0);
+            metric.max_value = max;
+            definitions.push(metric);
+        }
+    }
     let catalog = ron::to_string(&MetricCatalog {
         metrics: definitions,
     })
@@ -98,26 +111,22 @@ fn app_with(definitions: Vec<MetricDefinition>) -> App {
     app_with_catalog(&catalog)
 }
 
-fn act(app: &mut App, actions: impl IntoIterator<Item = GameAction>) {
+fn queue_change(app: &mut App, id: &str, delta: f64) {
+    let target = entity(app, id);
     app.world_mut()
-        .resource_mut::<PendingActions>()
+        .resource_mut::<PendingMetricChanges>()
         .0
-        .extend(actions);
-    app.update();
+        .push_back(MetricChange { target, delta });
 }
 
 fn change(app: &mut App, id: &str, delta: f64) {
-    act(
-        app,
-        [GameAction::ChangeMetric {
-            id: id.to_owned(),
-            delta,
-        }],
-    );
+    queue_change(app, id, delta);
+    app.update();
 }
 
 fn advance_months(app: &mut App, months: usize) {
-    act(app, (0..months).map(|_| GameAction::NextMonth));
+    app.world_mut().resource_mut::<PendingMonthAdvances>().0 += months;
+    app.update();
 }
 
 fn entity(app: &mut App, id: &str) -> Entity {
@@ -145,36 +154,9 @@ fn assert_value(app: &mut App, id: &str, expected: f64) {
     );
 }
 
-fn assert_date(app: &App, year: u32, month: u8) {
-    let date = app.world().resource::<GameDate>();
-    assert_eq!((date.year, date.month), (year, month));
-}
-
-#[derive(Resource, Default)]
-struct DirectEdits(Vec<(&'static str, f64)>);
-
-fn apply_direct_edits(
-    mut metrics: Query<(&MetricId, &mut MetricValue), With<Metric>>,
-    mut edits: ResMut<DirectEdits>,
-) {
-    for (id, delta) in edits.0.drain(..) {
-        let (_, mut value) = metrics
-            .iter_mut()
-            .find(|(metric_id, _)| metric_id.0 == id)
-            .expect("direct edit refers to a metric");
-        value.0 += delta;
-    }
-}
-
-#[derive(Resource, Default)]
-struct ChangedMetrics(Vec<String>);
-
-fn record_changed_metrics(
-    metrics: Query<&MetricId, (With<Metric>, Changed<MetricValue>)>,
-    mut changed: ResMut<ChangedMetrics>,
-) {
-    changed.0 = metrics.iter().map(|id| id.0.clone()).collect();
-    changed.0.sort();
+fn assert_date(app: &mut App, year: u32, month: u8) {
+    assert_value(app, YEAR_METRIC_ID, f64::from(year));
+    assert_value(app, MONTH_METRIC_ID, f64::from(month));
 }
 
 #[test]
@@ -184,7 +166,7 @@ fn startup_spawns_each_metric_without_propagating_initial_values() {
         definition("target", 3.0, immediate("source", 2.0)),
     ]);
 
-    assert_date(&app, 1, 1);
+    assert_date(&mut app, 1, 1);
     assert_value(&mut app, "source", 50.0);
     assert_value(&mut app, "target", 3.0);
     let world = app.world_mut();
@@ -196,7 +178,13 @@ fn startup_spawns_each_metric_without_propagating_initial_values() {
     metrics.sort_by_key(|(_, order)| *order);
     assert_eq!(
         metrics,
-        [("source".to_owned(), 0), ("target".to_owned(), 1)]
+        [
+            ("source".to_owned(), 0),
+            ("target".to_owned(), 1),
+            (YEAR_METRIC_ID.to_owned(), 2),
+            (MONTH_METRIC_ID.to_owned(), 3),
+            (TERM_METRIC_ID.to_owned(), 4),
+        ]
     );
 }
 
@@ -230,6 +218,10 @@ fn startup_exposes_metric_data_and_entity_influences_as_distinct_components() {
         assert_eq!(value.0, initial.0);
         if id.0 == "source" || id.0 == COLLAPSE_METRIC_ID {
             assert_eq!((bounds.min, bounds.max), (Some(0.0), Some(100.0)));
+        } else if id.0 == MONTH_METRIC_ID {
+            assert_eq!((bounds.min, bounds.max), (Some(1.0), Some(12.0)));
+        } else if id.0 == YEAR_METRIC_ID || id.0 == TERM_METRIC_ID {
+            assert_eq!((bounds.min, bounds.max), (Some(1.0), None));
         } else {
             assert_eq!((bounds.min, bounds.max), (None, None));
         }
@@ -243,6 +235,9 @@ fn startup_exposes_metric_data_and_entity_influences_as_distinct_components() {
             ("immediate".to_owned(), 1, true, false, false),
             ("annual".to_owned(), 2, false, true, false),
             (COLLAPSE_METRIC_ID.to_owned(), 3, false, false, true),
+            (YEAR_METRIC_ID.to_owned(), 4, false, false, false),
+            (MONTH_METRIC_ID.to_owned(), 5, false, false, false),
+            (TERM_METRIC_ID.to_owned(), 6, false, false, false),
         ]
     );
 
@@ -257,133 +252,132 @@ fn startup_exposes_metric_data_and_entity_influences_as_distinct_components() {
     assert_eq!((inputs[0].source, inputs[0].factor), (immediate, 3.0));
 }
 
+#[derive(Resource, Default)]
+struct MetricRequests(Vec<(&'static str, f64)>);
+
+fn submit_metric_requests(
+    metrics: Query<(Entity, &MetricId), With<Metric>>,
+    mut requests: ResMut<MetricRequests>,
+    mut pending: ResMut<PendingMetricChanges>,
+) {
+    for (id, delta) in requests.0.drain(..) {
+        let target = metrics
+            .iter()
+            .find_map(|(entity, metric_id)| (metric_id.0 == id).then_some(entity))
+            .unwrap();
+        pending.0.push_back(MetricChange { target, delta });
+    }
+}
+
 #[test]
-fn a_runtime_query_write_propagates_immediate_changes_once() {
+fn runtime_system_requests_and_existing_queue_propagate_once_in_the_same_frame() {
     let mut app = app_with(vec![
         bounded(definition("source", 10.0, None), 0.0, 12.0),
         definition("middle", 5.0, immediate("source", 2.0)),
         definition("target", 1.0, immediate("middle", 3.0)),
     ]);
-    app.insert_resource(DirectEdits(vec![("source", 20.0)]))
+    app.insert_resource(MetricRequests(vec![("source", 20.0), ("middle", 4.0)]))
         .add_systems(
             Update,
-            apply_direct_edits.before(SimulationSet::ObserveChanges),
+            submit_metric_requests.before(SimulationSet::ApplyChanges),
         );
 
-    app.update();
-
-    assert_value(&mut app, "source", 12.0);
-    assert_value(&mut app, "middle", 9.0);
-    assert_value(&mut app, "target", 13.0);
-
-    app.update();
-
-    assert_value(&mut app, "middle", 9.0);
-    assert_value(&mut app, "target", 13.0);
-}
-
-#[test]
-fn simultaneous_runtime_query_writes_propagate_each_external_delta_once() {
-    let mut app = app_with(vec![
-        definition("source", 10.0, None),
-        definition("middle", 5.0, immediate("source", 2.0)),
-        definition("target", 1.0, immediate("middle", 3.0)),
-    ]);
-    app.insert_resource(DirectEdits(vec![("source", 2.0), ("middle", 4.0)]))
-        .add_systems(
-            Update,
-            apply_direct_edits.before(SimulationSet::ObserveChanges),
-        );
-
-    app.update();
+    change(&mut app, "source", 1.0);
 
     assert_value(&mut app, "source", 12.0);
     assert_value(&mut app, "middle", 13.0);
     assert_value(&mut app, "target", 25.0);
-
+    assert!(app.world().resource::<PendingMetricChanges>().0.is_empty());
     app.update();
     assert_value(&mut app, "target", 25.0);
 }
 
 #[test]
-fn runtime_query_write_and_queued_action_each_propagate_in_the_same_frame() {
-    let mut app = app_with(vec![
-        definition("source", 10.0, None),
-        definition("target", 5.0, immediate("source", 2.0)),
-    ]);
-    app.insert_resource(DirectEdits(vec![("source", 2.0)]))
-        .add_systems(
-            Update,
-            apply_direct_edits.before(SimulationSet::ObserveChanges),
-        );
-
-    change(&mut app, "source", 3.0);
-
-    assert_value(&mut app, "source", 15.0);
-    assert_value(&mut app, "target", 15.0);
-
-    app.update();
-    assert_value(&mut app, "target", 15.0);
-}
-
-#[test]
-fn runtime_query_collapse_resets_without_repropagating_reset_deltas() {
+fn propagated_deltas_are_appended_after_existing_requests_in_the_same_fifo() {
     let mut app = app_with(vec![
         definition("source", 0.0, None),
         bounded(
-            definition(COLLAPSE_METRIC_ID, 0.0, immediate("source", 10.0)),
+            definition("target", 10.0, immediate("source", 1.0)),
             0.0,
-            100.0,
+            10.0,
         ),
-        definition("target", 5.0, immediate(COLLAPSE_METRIC_ID, 2.0)),
     ]);
-    advance_months(&mut app, 2);
-    app.insert_resource(DirectEdits(vec![("source", 15.0)]))
-        .add_systems(
-            Update,
-            apply_direct_edits.before(SimulationSet::ObserveChanges),
-        );
 
+    queue_change(&mut app, "source", 5.0);
+    queue_change(&mut app, "target", -5.0);
     app.update();
 
-    assert_value(&mut app, "source", 0.0);
-    assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
-    assert_value(&mut app, "target", 5.0);
-    assert_date(&app, 1, 1);
-
-    app.update();
-
-    assert_value(&mut app, "source", 0.0);
-    assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
-    assert_value(&mut app, "target", 5.0);
-    assert_date(&app, 1, 1);
+    assert_value(&mut app, "source", 5.0);
+    assert_value(&mut app, "target", 10.0);
+    assert!(app.world().resource::<PendingMetricChanges>().0.is_empty());
 }
 
 #[test]
-fn idle_and_unrelated_actions_do_not_mark_untouched_metric_values_changed() {
+fn invalid_requests_are_discarded_without_blocking_valid_changes() {
     let mut app = app_with(vec![
         definition("source", 10.0, None),
         definition("target", 5.0, immediate("source", 2.0)),
-        definition("untouched", 42.0, None),
     ]);
-    app.init_resource::<ChangedMetrics>().add_systems(
-        Update,
-        record_changed_metrics.after(SimulationSet::ApplyActions),
-    );
+    let unknown_target = app.world_mut().spawn_empty().id();
+    app.world_mut()
+        .resource_mut::<PendingMetricChanges>()
+        .0
+        .push_back(MetricChange {
+            target: unknown_target,
+            delta: 1.0,
+        });
+    queue_change(&mut app, "source", f64::NAN);
+    queue_change(&mut app, "source", f64::INFINITY);
+    queue_change(&mut app, "source", 3.0);
     app.update();
-    app.update();
-    assert!(app.world().resource::<ChangedMetrics>().0.is_empty());
 
-    change(&mut app, "source", 1.0);
+    assert_value(&mut app, "source", 13.0);
+    assert_value(&mut app, "target", 11.0);
+    assert!(app.world().resource::<PendingMetricChanges>().0.is_empty());
+}
 
-    assert_eq!(
-        app.world().resource::<ChangedMetrics>().0,
-        ["source".to_owned(), "target".to_owned()]
-    );
-    assert_value(&mut app, "untouched", 42.0);
+#[test]
+fn time_metrics_use_bounds_and_immediate_propagation() {
+    let mut app = app_with(vec![
+        definition("year_target", 0.0, immediate(YEAR_METRIC_ID, 2.0)),
+        definition("month_target", 0.0, immediate(MONTH_METRIC_ID, 3.0)),
+        definition("annual", 0.0, annual(YEAR_METRIC_ID, 10.0)),
+    ]);
 
-    change(&mut app, "source", 0.0);
-    assert!(app.world().resource::<ChangedMetrics>().0.is_empty());
+    change(&mut app, YEAR_METRIC_ID, 1.0);
+    change(&mut app, MONTH_METRIC_ID, 100.0);
+    assert_date(&mut app, 2, 12);
+    assert_value(&mut app, "year_target", 2.0);
+    assert_value(&mut app, "month_target", 33.0);
+    assert_value(&mut app, "annual", 0.0);
+    change(&mut app, MONTH_METRIC_ID, 5.0);
+    assert_value(&mut app, "month_target", 33.0);
+
+    advance_months(&mut app, 1);
+    assert_date(&mut app, 3, 1);
+    assert_value(&mut app, "year_target", 4.0);
+    assert_value(&mut app, "month_target", 0.0);
+    assert_value(&mut app, "annual", 30.0);
+
+    advance_months(&mut app, 1);
+    assert_date(&mut app, 3, 2);
+    assert_value(&mut app, "month_target", 3.0);
+}
+
+#[test]
+fn batched_month_requests_settle_every_crossed_year() {
+    let mut app = app_with(vec![
+        definition("annual", 0.0, annual(YEAR_METRIC_ID, 10.0)),
+        definition("target", 5.0, immediate("annual", 2.0)),
+    ]);
+
+    advance_months(&mut app, 24);
+
+    assert_date(&mut app, 3, 1);
+    assert_value(&mut app, "annual", 30.0);
+    assert_value(&mut app, "target", 65.0);
+    assert_eq!(app.world().resource::<PendingMonthAdvances>().0, 0);
+    assert!(app.world().resource::<PendingMetricChanges>().0.is_empty());
 }
 
 #[test]
@@ -499,7 +493,7 @@ fn annual_recalculation_replaces_the_value() {
     advance_months(&mut app, 12);
 
     assert_value(&mut app, "target", 18.0);
-    assert_date(&app, 2, 1);
+    assert_date(&mut app, 2, 1);
 }
 
 #[test]
@@ -647,15 +641,15 @@ fn annual_settlement_occurs_only_when_month_twelve_wraps() {
     ]);
 
     advance_months(&mut app, 11);
-    assert_date(&app, 1, 12);
+    assert_date(&mut app, 1, 12);
     assert_value(&mut app, "annual", 0.0);
 
     advance_months(&mut app, 1);
-    assert_date(&app, 2, 1);
+    assert_date(&mut app, 2, 1);
     assert_value(&mut app, "annual", 40.0);
 
     advance_months(&mut app, 1);
-    assert_date(&app, 2, 2);
+    assert_date(&mut app, 2, 2);
 }
 
 #[test]
@@ -718,11 +712,11 @@ fn collapse_at_one_hundred_resets_every_metric_and_the_date() {
     change(&mut app, "source", 5.0);
     advance_months(&mut app, 12);
     assert_value(&mut app, "target", 22.0);
-    assert_date(&app, 2, 1);
+    assert_date(&mut app, 2, 1);
 
     change(&mut app, COLLAPSE_METRIC_ID, 99.0);
     assert_value(&mut app, COLLAPSE_METRIC_ID, 99.0);
-    assert_date(&app, 2, 1);
+    assert_date(&mut app, 2, 1);
 
     change(&mut app, COLLAPSE_METRIC_ID, 1.0);
 
@@ -730,7 +724,8 @@ fn collapse_at_one_hundred_resets_every_metric_and_the_date() {
     assert_value(&mut app, "annual", 0.0);
     assert_value(&mut app, "target", 7.0);
     assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
-    assert_date(&app, 1, 1);
+    assert_date(&mut app, 1, 1);
+    assert_value(&mut app, TERM_METRIC_ID, 2.0);
 }
 
 #[test]
@@ -750,7 +745,8 @@ fn collapse_triggered_by_immediate_propagation_resets_the_run() {
     assert_value(&mut app, "source", 0.0);
     assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
     assert_value(&mut app, "target", 5.0);
-    assert_date(&app, 1, 1);
+    assert_date(&mut app, 1, 1);
+    assert_value(&mut app, TERM_METRIC_ID, 2.0);
 }
 
 #[test]
@@ -770,7 +766,8 @@ fn collapse_triggered_by_annual_settlement_resets_the_run() {
     assert_value(&mut app, "source", 50.0);
     assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
     assert_value(&mut app, "target", 7.0);
-    assert_date(&app, 1, 1);
+    assert_date(&mut app, 1, 1);
+    assert_value(&mut app, TERM_METRIC_ID, 2.0);
 }
 
 #[test]
@@ -794,39 +791,73 @@ fn collapse_triggered_by_an_annual_delta_stops_remaining_settlement_work() {
     assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
     assert_value(&mut app, "later_annual", 7.0);
     assert_value(&mut app, "target", 5.0);
-    assert_date(&app, 1, 1);
+    assert_date(&mut app, 1, 1);
+    assert_value(&mut app, TERM_METRIC_ID, 2.0);
 }
 
 #[test]
-fn collapse_discards_remaining_actions_from_the_previous_run() {
+fn collapse_discards_pending_changes_and_month_requests_from_the_previous_run() {
     let mut app = app_with(vec![
         definition("source", 10.0, None),
         bounded(definition(COLLAPSE_METRIC_ID, 0.0, None), 0.0, 100.0),
     ]);
 
-    act(
-        &mut app,
-        [
-            GameAction::ChangeMetric {
-                id: "source".to_owned(),
-                delta: 5.0,
-            },
-            GameAction::ChangeMetric {
-                id: COLLAPSE_METRIC_ID.to_owned(),
-                delta: 100.0,
-            },
-            GameAction::ChangeMetric {
-                id: "source".to_owned(),
-                delta: 50.0,
-            },
-            GameAction::NextMonth,
-        ],
-    );
+    queue_change(&mut app, "source", 5.0);
+    queue_change(&mut app, COLLAPSE_METRIC_ID, 100.0);
+    queue_change(&mut app, "source", 50.0);
+    app.world_mut().resource_mut::<PendingMonthAdvances>().0 = 3;
+    app.update();
 
     assert_value(&mut app, "source", 10.0);
     assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
-    assert_date(&app, 1, 1);
-    assert!(app.world().resource::<PendingActions>().0.is_empty());
+    assert_date(&mut app, 1, 1);
+    assert_value(&mut app, TERM_METRIC_ID, 2.0);
+    assert!(app.world().resource::<PendingMetricChanges>().0.is_empty());
+    assert_eq!(app.world().resource::<PendingMonthAdvances>().0, 0);
+    app.update();
+    assert_date(&mut app, 1, 1);
+    assert_value(&mut app, TERM_METRIC_ID, 2.0);
+}
+
+#[test]
+fn collapse_increments_current_term_and_resets_time_to_one() {
+    let mut app = app_with(vec![
+        definition(YEAR_METRIC_ID, 5.0, None),
+        definition(MONTH_METRIC_ID, 8.0, None),
+        definition(TERM_METRIC_ID, 1.0, None),
+        definition("source", 10.0, None),
+        definition("target", 7.0, immediate("source", 2.0)),
+        bounded(definition(COLLAPSE_METRIC_ID, 0.0, None), 0.0, 100.0),
+    ]);
+    change(&mut app, TERM_METRIC_ID, 5.0);
+    change(&mut app, "source", 5.0);
+    change(&mut app, COLLAPSE_METRIC_ID, 100.0);
+
+    assert_value(&mut app, "source", 10.0);
+    assert_value(&mut app, "target", 7.0);
+    assert_date(&mut app, 1, 1);
+    assert_value(&mut app, TERM_METRIC_ID, 7.0);
+
+    change(&mut app, COLLAPSE_METRIC_ID, 100.0);
+    assert_value(&mut app, TERM_METRIC_ID, 8.0);
+    assert_date(&mut app, 1, 1);
+}
+
+#[test]
+fn collapse_from_time_propagation_cancels_remaining_month_requests() {
+    let mut app = app_with(vec![bounded(
+        definition(COLLAPSE_METRIC_ID, 0.0, immediate(MONTH_METRIC_ID, 100.0)),
+        0.0,
+        100.0,
+    )]);
+
+    advance_months(&mut app, 24);
+
+    assert_date(&mut app, 1, 1);
+    assert_value(&mut app, COLLAPSE_METRIC_ID, 0.0);
+    assert_value(&mut app, TERM_METRIC_ID, 2.0);
+    assert_eq!(app.world().resource::<PendingMonthAdvances>().0, 0);
+    assert!(app.world().resource::<PendingMetricChanges>().0.is_empty());
 }
 
 #[test]
@@ -858,6 +889,9 @@ fn ron_supports_omitted_optional_fields_and_both_influence_kinds() {
                     (source_metric: "immediate", factor: 3.0),
                 ])),
             ),
+            (id: "year", name: "年份", description: "时间", initial_value: 1.0),
+            (id: "month", name: "月份", description: "时间", initial_value: 1.0),
+            (id: "term", name: "任期", description: "局次", initial_value: 1.0),
         ])"#;
     let catalog: MetricCatalog = ron::from_str(catalog_ron).expect("RON catalog deserializes");
     assert!(catalog.metrics[0].min_value.is_none());
@@ -878,12 +912,28 @@ fn repository_metric_catalog_parses_and_runs_the_example_loop() {
 
     assert_value(&mut app, "productivity", 10.0);
     assert_value(&mut app, "output", 20.0);
+    assert_date(&mut app, 1, 1);
+    assert_value(&mut app, TERM_METRIC_ID, 1.0);
     change(&mut app, "productivity", 5.0);
     assert_value(&mut app, "output", 30.0);
     advance_months(&mut app, 12);
     assert_value(&mut app, "income", 45.0);
     assert_value(&mut app, "reserves", 72.5);
-    assert_date(&app, 2, 1);
+    assert_date(&mut app, 2, 1);
+}
+
+#[test]
+fn requests_wait_for_asset_loading_before_advancing_time() {
+    let mut app = catalog_app(include_str!("../assets/data/metrics.metric.ron"));
+    app.world_mut().resource_mut::<PendingMonthAdvances>().0 = 12;
+
+    update_until(&mut app, |world| world.contains_resource::<MetricReady>());
+
+    assert_date(&mut app, 2, 1);
+    assert_value(&mut app, "income", 30.0);
+    assert_value(&mut app, "reserves", 65.0);
+    assert_value(&mut app, TERM_METRIC_ID, 1.0);
+    assert_eq!(app.world().resource::<PendingMonthAdvances>().0, 0);
 }
 
 #[test]

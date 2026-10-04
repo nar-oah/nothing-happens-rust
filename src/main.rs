@@ -6,7 +6,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Nothing Happens — Phase 1".into(),
-                resolution: (960, 780).into(),
+                resolution: (960, 1000).into(),
                 ..default()
             }),
             ..default()

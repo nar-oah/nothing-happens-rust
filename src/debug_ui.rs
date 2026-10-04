@@ -1,8 +1,9 @@
 use bevy::prelude::*;
 
 use crate::metrics::{
-    AnnualInfluence, GameAction, GameDate, GameStatus, ImmediateInfluence, Metric, MetricId,
-    MetricMetadata, MetricOrder, MetricReady, MetricValue, PendingActions, SimulationSet,
+    AnnualInfluence, ImmediateInfluence, MONTH_METRIC_ID, Metric, MetricChange, MetricId,
+    MetricMetadata, MetricOrder, MetricReady, MetricValue, PendingMetricChanges,
+    PendingMonthAdvances, SimulationSet, TERM_METRIC_ID, YEAR_METRIC_ID,
 };
 
 pub struct DebugUiPlugin;
@@ -10,18 +11,20 @@ pub struct DebugUiPlugin;
 impl Plugin for DebugUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, setup_ui.run_if(resource_added::<MetricReady>))
-            .add_systems(Update, handle_buttons.before(SimulationSet::ApplyActions))
-            .add_systems(Update, refresh_labels.after(SimulationSet::ApplyActions));
+            .add_systems(Update, handle_buttons.before(SimulationSet::ApplyChanges))
+            .add_systems(Update, refresh_labels.after(SimulationSet::AdvanceTime));
     }
 }
 
 #[derive(Component)]
-struct DebugAction(GameAction);
+struct ChangeMetricButton(MetricChange);
+
+#[derive(Component)]
+struct NextMonthButton;
 
 #[derive(Component)]
 enum DisplayValue {
     Date,
-    Status,
     Metric(Entity),
 }
 
@@ -39,10 +42,9 @@ fn label(text: impl Into<String>, size: f32, color: Color) -> impl Bundle {
     )
 }
 
-fn button(text: impl Into<String>, action: GameAction) -> impl Bundle {
+fn button(text: impl Into<String>) -> impl Bundle {
     (
         Button,
-        DebugAction(action),
         Node {
             min_width: px(74),
             height: px(36),
@@ -68,6 +70,7 @@ type MetricRowData = (
 );
 
 type MetricLabelData = (
+    &'static MetricId,
     &'static MetricMetadata,
     &'static MetricValue,
     Has<ImmediateInfluence>,
@@ -82,15 +85,15 @@ fn setup_ui(mut commands: Commands, metrics: Query<MetricRowData, With<Metric>>)
         .spawn(Node {
             width: percent(100),
             height: percent(100),
-            padding: UiRect::all(px(28)),
+            padding: UiRect::all(px(20)),
             flex_direction: FlexDirection::Column,
-            row_gap: px(14),
+            row_gap: px(10),
             ..default()
         })
         .with_children(|root| {
             root.spawn(label("NOTHING HAPPENS · 指标调试", 26.0, PRIMARY_TEXT));
             root.spawn((
-                label("Year 1 / Month 1", 22.0, Color::srgb(0.42, 0.83, 0.69)),
+                label("", 22.0, Color::srgb(0.42, 0.83, 0.69)),
                 DisplayValue::Date,
             ));
             root.spawn(label(
@@ -103,9 +106,9 @@ fn setup_ui(mut commands: Commands, metrics: Query<MetricRowData, With<Metric>>)
                 root.spawn((
                     Node {
                         width: percent(100),
-                        padding: UiRect::all(px(14)),
+                        padding: UiRect::all(px(10)),
                         flex_direction: FlexDirection::Column,
-                        row_gap: px(6),
+                        row_gap: px(4),
                         border_radius: BorderRadius::all(px(5)),
                         ..default()
                     },
@@ -135,16 +138,21 @@ fn setup_ui(mut commands: Commands, metrics: Query<MetricRowData, With<Metric>>)
                             .with_children(|controls| {
                                 let changes: &[f64] = if id.0 == "collapse" {
                                     &[25.0, 100.0]
+                                } else if matches!(
+                                    id.0.as_str(),
+                                    YEAR_METRIC_ID | MONTH_METRIC_ID | TERM_METRIC_ID
+                                ) {
+                                    &[-1.0, 1.0]
                                 } else {
                                     &[-5.0, 5.0]
                                 };
                                 for &delta in changes {
-                                    controls.spawn(button(
-                                        format!("{delta:+.0}"),
-                                        GameAction::ChangeMetric {
-                                            id: id.0.clone(),
+                                    controls.spawn((
+                                        button(format!("{delta:+.0}")),
+                                        ChangeMetricButton(MetricChange {
+                                            target: entity,
                                             delta,
-                                        },
+                                        }),
                                     ));
                                 }
                             });
@@ -153,8 +161,7 @@ fn setup_ui(mut commands: Commands, metrics: Query<MetricRowData, With<Metric>>)
                 });
             }
 
-            root.spawn(button("Next Month", GameAction::NextMonth));
-            root.spawn((label("", 15.0, SECONDARY_TEXT), DisplayValue::Status));
+            root.spawn((button("Next Month"), NextMonthButton));
             root.spawn(label("Esc：退出", 13.0, SECONDARY_TEXT));
         });
 }
@@ -176,13 +183,27 @@ fn metric_text(
 }
 
 fn handle_buttons(
-    mut buttons: Query<(&Interaction, &DebugAction, &mut BackgroundColor), Changed<Interaction>>,
-    mut actions: ResMut<PendingActions>,
+    mut buttons: Query<
+        (
+            &Interaction,
+            Option<&ChangeMetricButton>,
+            Has<NextMonthButton>,
+            &mut BackgroundColor,
+        ),
+        (With<Button>, Changed<Interaction>),
+    >,
+    mut changes: ResMut<PendingMetricChanges>,
+    mut months: ResMut<PendingMonthAdvances>,
 ) {
-    for (interaction, action, mut color) in &mut buttons {
+    for (interaction, change, next_month, mut color) in &mut buttons {
         *color = match interaction {
             Interaction::Pressed => {
-                actions.0.push_back(action.0.clone());
+                if let Some(change) = change {
+                    changes.0.push_back(change.0);
+                }
+                if next_month {
+                    months.0 += 1;
+                }
                 PRESSED_BUTTON
             }
             Interaction::Hovered => HOVERED_BUTTON,
@@ -193,19 +214,29 @@ fn handle_buttons(
 }
 
 fn refresh_labels(
-    date: Res<GameDate>,
-    status: Res<GameStatus>,
     metrics: Query<MetricLabelData, With<Metric>>,
     mut labels: Query<(&DisplayValue, &mut Text)>,
 ) {
     for (display, mut text) in &mut labels {
         let value = match display {
-            DisplayValue::Date => format!("Year {} / Month {}", date.year, date.month),
-            DisplayValue::Status => {
-                format!("重开次数：{}  ·  {}", status.restarts, status.last_action)
+            DisplayValue::Date => {
+                let value = |id| {
+                    metrics
+                        .iter()
+                        .find_map(|(metric_id, _, value, _, _)| {
+                            (metric_id.0 == id).then_some(value.0)
+                        })
+                        .expect("time and term metrics exist")
+                };
+                format!(
+                    "Year {} / Month {} / Term {}",
+                    value(YEAR_METRIC_ID),
+                    value(MONTH_METRIC_ID),
+                    value(TERM_METRIC_ID)
+                )
             }
             DisplayValue::Metric(entity) => {
-                let (metadata, value, immediate, annual) =
+                let (_, metadata, value, immediate, annual) =
                     metrics.get(*entity).expect("metric entity exists");
                 metric_text(metadata, value, immediate, annual)
             }
@@ -225,17 +256,28 @@ mod tests {
     use super::*;
     use crate::metrics::MetricPlugin;
 
-    fn press(app: &mut App, action: GameAction) {
+    fn press(app: &mut App, entity: Entity) {
         let world = app.world_mut();
-        let entity = world
-            .query::<(Entity, &DebugAction)>()
-            .iter(world)
-            .find_map(|(entity, button)| (button.0 == action).then_some(entity))
-            .expect("action has a UI button");
         *world.get_mut::<Interaction>(entity).unwrap() = Interaction::None;
         app.update();
         *app.world_mut().get_mut::<Interaction>(entity).unwrap() = Interaction::Pressed;
         app.update();
+    }
+
+    fn change_button(app: &mut App, id: &str, delta: f64) -> Entity {
+        let world = app.world_mut();
+        let target = world
+            .query::<(Entity, &MetricId)>()
+            .iter(world)
+            .find_map(|(entity, metric_id)| (metric_id.0 == id).then_some(entity))
+            .unwrap();
+        world
+            .query::<(Entity, &ChangeMetricButton)>()
+            .iter(world)
+            .find_map(|(entity, button)| {
+                (button.0 == MetricChange { target, delta }).then_some(entity)
+            })
+            .expect("metric change has a UI button")
     }
 
     fn displays(app: &mut App, expected: &str) -> bool {
@@ -244,6 +286,40 @@ mod tests {
             .query::<&Text>()
             .iter(world)
             .any(|text| text.0 == expected)
+    }
+
+    #[test]
+    fn buttons_only_submit_requests_and_held_buttons_do_not_repeat() {
+        let mut app = App::new();
+        app.init_resource::<PendingMetricChanges>()
+            .init_resource::<PendingMonthAdvances>()
+            .add_systems(Update, handle_buttons);
+        let target = app.world_mut().spawn((Metric, MetricValue(10.0))).id();
+        let change = MetricChange { target, delta: 5.0 };
+        app.world_mut().spawn((
+            Button,
+            Interaction::Pressed,
+            BackgroundColor(NORMAL_BUTTON),
+            ChangeMetricButton(change),
+        ));
+        app.world_mut().spawn((
+            Button,
+            Interaction::Pressed,
+            BackgroundColor(NORMAL_BUTTON),
+            NextMonthButton,
+        ));
+
+        app.update();
+
+        assert_eq!(app.world().get::<MetricValue>(target).unwrap().0, 10.0);
+        assert_eq!(
+            app.world().resource::<PendingMetricChanges>().0,
+            std::collections::VecDeque::from([change]),
+        );
+        assert_eq!(app.world().resource::<PendingMonthAdvances>().0, 1);
+        app.update();
+        assert_eq!(app.world().resource::<PendingMetricChanges>().0.len(), 1);
+        assert_eq!(app.world().resource::<PendingMonthAdvances>().0, 1);
     }
 
     #[test]
@@ -258,45 +334,50 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             app.update();
-            if displays(&mut app, "Year 1 / Month 1") {
+            if displays(&mut app, "Year 1 / Month 1 / Term 1") {
                 break;
             }
             assert!(Instant::now() < deadline, "metric UI did not load in time");
             std::thread::yield_now();
         }
 
-        press(
-            &mut app,
-            GameAction::ChangeMetric {
-                id: "productivity".into(),
-                delta: 5.0,
-            },
-        );
+        let productivity = change_button(&mut app, "productivity", 5.0);
+        press(&mut app, productivity);
         assert!(displays(&mut app, "生产力  15.00  ·  Manual"));
         assert!(displays(&mut app, "产出  30.00  ·  Immediate"));
         // A held button must not apply the change again in the next frame.
         app.update();
         assert!(displays(&mut app, "生产力  15.00  ·  Manual"));
 
+        let world = app.world_mut();
+        let next_month = world
+            .query_filtered::<Entity, With<NextMonthButton>>()
+            .single(world)
+            .unwrap();
         for _ in 0..12 {
-            press(&mut app, GameAction::NextMonth);
+            press(&mut app, next_month);
         }
-        assert!(displays(&mut app, "Year 2 / Month 1"));
+        assert!(displays(&mut app, "Year 2 / Month 1 / Term 1"));
         assert!(displays(&mut app, "年收入  45.00  ·  Annual"));
         assert!(displays(&mut app, "储备  72.50  ·  Immediate"));
 
-        press(
-            &mut app,
-            GameAction::ChangeMetric {
-                id: "collapse".into(),
-                delta: 100.0,
-            },
-        );
-        assert!(displays(&mut app, "Year 1 / Month 1"));
+        let collapse = change_button(&mut app, "collapse", 100.0);
+        press(&mut app, collapse);
+        assert!(displays(&mut app, "Year 1 / Month 1 / Term 2"));
         assert!(displays(&mut app, "生产力  10.00  ·  Manual"));
         assert!(displays(&mut app, "年收入  0.00  ·  Annual"));
         assert!(displays(&mut app, "储备  50.00  ·  Immediate"));
         assert!(displays(&mut app, "崩溃度  0.00  ·  Manual"));
-        assert_eq!(app.world().resource::<GameStatus>().restarts, 1);
+        assert!(displays(&mut app, "任期  2.00  ·  Manual"));
+
+        let year = change_button(&mut app, YEAR_METRIC_ID, 1.0);
+        let month = change_button(&mut app, MONTH_METRIC_ID, 1.0);
+        let term = change_button(&mut app, TERM_METRIC_ID, 1.0);
+        press(&mut app, year);
+        press(&mut app, month);
+        press(&mut app, term);
+        assert!(displays(&mut app, "Year 2 / Month 2 / Term 3"));
+        assert!(displays(&mut app, "年份  2.00  ·  Manual"));
+        assert!(displays(&mut app, "月份  2.00  ·  Manual"));
     }
 }

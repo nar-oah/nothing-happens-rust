@@ -12,6 +12,9 @@ pub use components::*;
 pub use simulation::*;
 
 pub const COLLAPSE_METRIC_ID: &str = "collapse";
+pub const YEAR_METRIC_ID: &str = "year";
+pub const MONTH_METRIC_ID: &str = "month";
+pub const TERM_METRIC_ID: &str = "term";
 const METRIC_CATALOG_PATH: &str = "data/metrics.metric.ron";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,11 +24,9 @@ pub enum MetricError {
     ImmediateCycle(Vec<String>),
     AnnualSource { target: String, source: String },
     InvalidDefinition { id: String, reason: String },
-    UnknownMetric(String),
     NonFiniteDelta,
     InvalidValue { id: String },
     SimulationNotReady,
-    YearOverflow,
 }
 
 impl fmt::Display for MetricError {
@@ -47,11 +48,9 @@ impl fmt::Display for MetricError {
             Self::InvalidDefinition { id, reason } => {
                 write!(f, "invalid metric {id}: {reason}")
             }
-            Self::UnknownMetric(id) => write!(f, "unknown metric: {id}"),
             Self::NonFiniteDelta => write!(f, "metric changes must have a finite delta"),
             Self::InvalidValue { id } => write!(f, "calculation for metric {id} is not finite"),
             Self::SimulationNotReady => write!(f, "a required metric entity is unavailable"),
-            Self::YearOverflow => write!(f, "game year exceeds the supported range"),
         }
     }
 }
@@ -73,7 +72,7 @@ impl Plugin for MetricPlugin {
             .add_systems(Startup, request_metric_catalog)
             .add_systems(
                 Update,
-                spawn_metrics_when_loaded.before(SimulationSet::ObserveChanges),
+                spawn_metrics_when_loaded.before(SimulationSet::ApplyChanges),
             );
     }
 }
@@ -120,7 +119,6 @@ fn spawn_metric_entities(world: &mut World, definitions: &[MetricDefinition]) {
             },
             MetricValue(definition.initial_value),
             InitialValue(definition.initial_value),
-            PreviousValue(definition.initial_value),
             MetricBounds {
                 min: definition.min_value,
                 max: definition.max_value,

@@ -42,10 +42,5 @@ pub struct AnnualInfluence(pub Vec<MetricInput>);
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct CollapseMetric;
 
-/// Last value already propagated through Immediate influences. This is local
-/// to an entity so other systems can write MetricValue through ordinary Queries.
-#[derive(Component, Clone, Copy, Debug)]
-pub struct PreviousValue(pub f64);
-
 #[derive(Resource, Clone, Copy, Debug, Default)]
 pub struct MetricReady;
