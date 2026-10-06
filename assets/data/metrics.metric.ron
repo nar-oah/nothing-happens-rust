@@ -38,8 +38,11 @@
             min_value: Some(0.0),
             max_value: Some(120.0),
             influence: Some(Immediate([
-                (source_metric: "productivity", factor: 2.0),
-            ])),
+                        (
+                            source_metric: "productivity",
+                            factor: 2.0,
+                        ),
+                    ])),
         ),
         (
             id: "income",
@@ -49,8 +52,11 @@
             min_value: Some(0.0),
             max_value: Some(200.0),
             influence: Some(Annual([
-                (source_metric: "output", factor: 1.5),
-            ])),
+                        (
+                            source_metric: "output",
+                            factor: 1.5,
+                        ),
+                    ])),
         ),
         (
             id: "reserves",
@@ -60,8 +66,11 @@
             min_value: Some(0.0),
             max_value: Some(500.0),
             influence: Some(Immediate([
-                (source_metric: "income", factor: 0.5),
-            ])),
+                        (
+                            source_metric: "income",
+                            factor: 0.5,
+                        ),
+                    ])),
         ),
         (
             id: "collapse",
