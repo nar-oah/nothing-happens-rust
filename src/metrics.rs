@@ -52,16 +52,12 @@ fn handle_metric_catalog_events(
         let AssetEvent::LoadedWithDependencies { id } = event else {
             continue;
         };
-
-        if *id != handle.0.id() {
-            continue;
+        if *id == handle.0.id() {
+            let catalog = catalogs
+                .get(&handle.0)
+                .expect("loaded metric catalog must be available");
+            spawn_metric_entities(&mut commands, &catalog.metrics);
         }
-
-        let catalog = catalogs
-            .get(&handle.0)
-            .expect("loaded metric catalog must be available");
-
-        spawn_metric_entities(&mut commands, &catalog.metrics);
     }
 }
 

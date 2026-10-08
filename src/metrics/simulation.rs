@@ -1,8 +1,6 @@
-use std::collections::VecDeque;
-
-use bevy::prelude::*;
-
 use super::{MONTH_METRIC_ID, TERM_METRIC_ID, YEAR_METRIC_ID, components::*};
+use bevy::prelude::*;
+use std::collections::VecDeque;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MetricChange {
@@ -13,7 +11,6 @@ pub struct MetricChange {
 #[derive(Resource, Debug, Default)]
 pub struct PendingMetricChanges(pub VecDeque<MetricChange>);
 
-/// Time requests are separate from metric deltas.
 #[derive(Resource, Debug, Default)]
 pub struct PendingMonthAdvances(pub usize);
 
@@ -65,8 +62,6 @@ fn apply_pending_metric_changes(
     process_metric_changes(&mut values, &influences, &mut pending, &mut months);
 }
 
-/// Consume requested and propagated deltas from the same FIFO queue.
-/// Return true when collapse resets the run and discards its pending requests.
 fn process_metric_changes(
     values: &mut MetricValues,
     influences: &ImmediateInfluences,
@@ -168,7 +163,6 @@ fn enqueue_annual_changes(
     influences: &Query<(Entity, &MetricOrder, &AnnualInfluence), With<Metric>>,
     pending: &mut PendingMetricChanges,
 ) {
-    // Snapshot all Annual inputs before applying any settlement delta.
     let mut changes = Vec::new();
     for (target, order, annual) in influences.iter() {
         let mut new_value = 0.0;
@@ -196,7 +190,6 @@ fn enqueue_annual_changes(
 }
 
 fn bounded_value(bounds: &MetricBounds, id: &str, mut value: f64) -> f64 {
-    // f64::max/min ignore NaN; reject it before applying valid bounds.
     assert!(!value.is_nan(), "Metric `{id}` value must not be NaN");
     if let Some(min) = bounds.min {
         value = value.max(min);
@@ -215,7 +208,6 @@ fn checked_delta(id: &str, new: f64, old: f64) -> f64 {
 }
 
 fn restart_game(values: &mut MetricValues) {
-    // Restore initial state without propagating reset deltas.
     for (_, id, _, initial, _, mut value) in values.iter_mut() {
         value.0 = match id.0.as_str() {
             TERM_METRIC_ID => value.0 + 1.0,
