@@ -16,6 +16,8 @@ cargo run
 
 指标定义位于 `assets/data/metrics.metric.ron`。正式运行时由 Bevy `AssetServer` 异步加载，`MetricCatalogLoader` 使用 RON 解析并校验数据；加载完成后再生成 Metric Entity。Debug UI 响应 `Added<Metric>`，在 Metric Entity 创建后初始化一次；simulation 不依赖额外的就绪标记。
 
+指标资源读取、RON 解析或定义校验失败会终止游戏，并报告资源路径和原因。运行时非法增量、非有限计算结果或缺失指标实体通过断言直接暴露。
+
 Metric 模块按职责拆分：
 
 - `src/metrics.rs`：`MetricPlugin`、Asset 到 Entity 的组装。
