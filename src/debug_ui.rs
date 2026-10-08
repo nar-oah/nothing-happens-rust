@@ -83,6 +83,13 @@ type MetricLabelData = (
     Has<AnnualInfluence>,
 );
 
+type ButtonData = (
+    &'static Interaction,
+    Option<&'static ChangeMetricButton>,
+    Has<NextMonthButton>,
+    &'static mut BackgroundColor,
+);
+
 fn setup_ui(mut commands: Commands, metrics: Query<MetricRowData, With<Metric>>) {
     let mut rows: Vec<_> = metrics.iter().collect();
     rows.sort_by_key(|(_, _, _, _, order, _, _)| order.0);
@@ -189,15 +196,7 @@ fn metric_text(
 }
 
 fn handle_buttons(
-    mut buttons: Query<
-        (
-            &Interaction,
-            Option<&ChangeMetricButton>,
-            Has<NextMonthButton>,
-            &mut BackgroundColor,
-        ),
-        (With<Button>, Changed<Interaction>),
-    >,
+    mut buttons: Query<ButtonData, (With<Button>, Changed<Interaction>)>,
     mut changes: ResMut<PendingMetricChanges>,
     mut months: ResMut<PendingMonthAdvances>,
 ) {
