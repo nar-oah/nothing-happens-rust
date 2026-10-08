@@ -14,7 +14,7 @@ cargo run
 
 窗口中的 `-5` / `+5` 修改对应指标，年份、月份和任期使用 `-1` / `+1`，`Next Month` 推进一个月。崩溃度按钮增加 25 或 100；达到 100 后普通指标恢复初始值，年份和月份归 1，任期加 1。Esc 或关闭窗口退出。UI 只提交请求，不直接写入指标。
 
-指标定义位于 `assets/data/metrics.metric.ron`。正式运行时由 Bevy `AssetServer` 异步加载，`MetricCatalogLoader` 使用 RON 解析并校验数据；加载完成后再生成 Metric Entity，并插入 `MetricReady`。
+指标定义位于 `assets/data/metrics.metric.ron`。正式运行时由 Bevy `AssetServer` 异步加载，`MetricCatalogLoader` 使用 RON 解析并校验数据；加载完成后再生成 Metric Entity。Debug UI 响应 `Added<Metric>`，在 Metric Entity 创建后初始化一次；simulation 不依赖额外的就绪标记。
 
 Metric 模块按职责拆分：
 

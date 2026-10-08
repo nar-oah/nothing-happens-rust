@@ -1,16 +1,22 @@
-use bevy::prelude::*;
+use bevy::{ecs::schedule::common_conditions::any_match_filter, prelude::*};
 
 use crate::metrics::{
     AnnualInfluence, ImmediateInfluence, MONTH_METRIC_ID, Metric, MetricChange, MetricId,
-    MetricMetadata, MetricOrder, MetricReady, MetricValue, PendingMetricChanges,
-    PendingMonthAdvances, SimulationSet, TERM_METRIC_ID, YEAR_METRIC_ID,
+    MetricMetadata, MetricOrder, MetricValue, PendingMetricChanges, PendingMonthAdvances,
+    SimulationSet, TERM_METRIC_ID, YEAR_METRIC_ID,
 };
 
 pub struct DebugUiPlugin;
 
 impl Plugin for DebugUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, setup_ui.run_if(resource_added::<MetricReady>))
+        app.add_systems(
+            Update,
+            setup_ui
+                .run_if(any_match_filter::<Added<Metric>>.and_then(run_once))
+                .after(SimulationSet::AdvanceTime)
+                .before(refresh_labels),
+        )
             .add_systems(Update, handle_buttons.before(SimulationSet::ApplyChanges))
             .add_systems(Update, refresh_labels.after(SimulationSet::AdvanceTime));
     }
@@ -320,6 +326,52 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<PendingMetricChanges>().0.len(), 1);
         assert_eq!(app.world().resource::<PendingMonthAdvances>().0, 1);
+    }
+
+    #[test]
+    fn ui_is_created_once_when_metric_entities_are_spawned() {
+        let mut app = App::new();
+        app.init_resource::<PendingMetricChanges>()
+            .init_resource::<PendingMonthAdvances>()
+            .add_plugins(DebugUiPlugin);
+
+        for _ in 0..2 {
+            app.update();
+            let world = app.world_mut();
+            assert_eq!(world.query::<&Camera2d>().iter(world).count(), 0);
+            assert_eq!(world.query::<&Button>().iter(world).count(), 0);
+        }
+
+        app.add_systems(
+            Update,
+            (|mut commands: Commands| {
+                for (order, id) in [YEAR_METRIC_ID, MONTH_METRIC_ID, TERM_METRIC_ID]
+                    .into_iter()
+                    .enumerate()
+                {
+                    commands.spawn((
+                        Metric,
+                        MetricId(id.into()),
+                        MetricMetadata {
+                            name: id.into(),
+                            description: id.into(),
+                        },
+                        MetricValue(1.0),
+                        MetricOrder(order),
+                    ));
+                }
+            })
+            .run_if(run_once)
+            .before(SimulationSet::AdvanceTime),
+        );
+
+        for _ in 0..3 {
+            app.update();
+            assert!(displays(&mut app, "Year 1 / Month 1 / Term 1"));
+            let world = app.world_mut();
+            assert_eq!(world.query::<&Camera2d>().iter(world).count(), 1);
+            assert_eq!(world.query::<&Button>().iter(world).count(), 7);
+        }
     }
 
     #[test]

@@ -17,7 +17,7 @@ use nothing_happens::metrics::{
     AnnualInfluence, COLLAPSE_METRIC_ID, CollapseMetric, ImmediateInfluence, Influence,
     InfluenceTerm, InitialValue, MONTH_METRIC_ID, Metric, MetricBounds, MetricCatalog,
     MetricChange, MetricDefinition, MetricError, MetricId, MetricMetadata, MetricOrder,
-    MetricPlugin, MetricReady, MetricValue, PendingMetricChanges, PendingMonthAdvances,
+    MetricPlugin, MetricValue, PendingMetricChanges, PendingMonthAdvances,
     SimulationSet, TERM_METRIC_ID, YEAR_METRIC_ID, validate_definitions,
 };
 
@@ -70,11 +70,11 @@ fn catalog_app(catalog: &str) -> App {
     app
 }
 
-fn update_until(app: &mut App, ready: impl Fn(&World) -> bool) {
+fn update_until(app: &mut App, ready: impl Fn(&mut World) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         app.update();
-        if ready(app.world()) {
+        if ready(app.world_mut()) {
             return;
         }
         assert!(
@@ -87,7 +87,13 @@ fn update_until(app: &mut App, ready: impl Fn(&World) -> bool) {
 
 fn app_with_catalog(catalog: &str) -> App {
     let mut app = catalog_app(catalog);
-    update_until(&mut app, |world| world.contains_resource::<MetricReady>());
+    update_until(&mut app, |world| {
+        world
+            .query_filtered::<Entity, With<Metric>>()
+            .iter(world)
+            .next()
+            .is_some()
+    });
     app
 }
 
@@ -923,20 +929,6 @@ fn repository_metric_catalog_parses_and_runs_the_example_loop() {
 }
 
 #[test]
-fn requests_wait_for_asset_loading_before_advancing_time() {
-    let mut app = catalog_app(include_str!("../assets/data/metrics.metric.ron"));
-    app.world_mut().resource_mut::<PendingMonthAdvances>().0 = 12;
-
-    update_until(&mut app, |world| world.contains_resource::<MetricReady>());
-
-    assert_date(&mut app, 2, 1);
-    assert_value(&mut app, "income", 30.0);
-    assert_value(&mut app, "reserves", 65.0);
-    assert_value(&mut app, TERM_METRIC_ID, 1.0);
-    assert_eq!(app.world().resource::<PendingMonthAdvances>().0, 0);
-}
-
-#[test]
 fn invalid_metric_catalog_fails_to_load_without_spawning_metrics() {
     let catalog = ron::to_string(&MetricCatalog {
         metrics: vec![
@@ -965,7 +957,6 @@ fn invalid_metric_catalog_fails_to_load_without_spawning_metrics() {
         panic!("invalid metric catalog must fail to load");
     };
     assert!(error.to_string().contains("duplicate metric id: duplicate"));
-    assert!(!app.world().contains_resource::<MetricReady>());
     let world = app.world_mut();
     assert_eq!(
         world
