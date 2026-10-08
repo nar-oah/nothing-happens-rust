@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use bevy::prelude::*;
 
-use super::{MONTH_METRIC_ID, MetricError, TERM_METRIC_ID, YEAR_METRIC_ID, components::*};
+use super::{MONTH_METRIC_ID, TERM_METRIC_ID, YEAR_METRIC_ID, components::*};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MetricChange {
@@ -74,13 +74,7 @@ fn process_metric_changes(
     months: &mut PendingMonthAdvances,
 ) -> bool {
     while let Some(change) = pending.0.pop_front() {
-        let (actual_delta, collapsed) = match apply_metric_change(values, change) {
-            Ok(result) => result,
-            Err(error) => {
-                warn!("Metric change failed: {error}");
-                continue;
-            }
-        };
+        let (actual_delta, collapsed) = apply_metric_change(values, change);
         if collapsed {
             restart_game(values);
             pending.0.clear();
@@ -107,22 +101,17 @@ fn process_metric_changes(
     false
 }
 
-fn apply_metric_change(
-    values: &mut MetricValues,
-    change: MetricChange,
-) -> Result<(f64, bool), MetricError> {
-    if !change.delta.is_finite() {
-        return Err(MetricError::NonFiniteDelta);
-    }
+fn apply_metric_change(values: &mut MetricValues, change: MetricChange) -> (f64, bool) {
+    assert!(change.delta.is_finite(), "Metric delta must be finite");
     let (_, id, bounds, _, collapse, mut value) = values
         .get_mut(change.target)
-        .map_err(|_| MetricError::SimulationNotReady)?;
-    let new = bounded_value(bounds, &id.0, value.0 + change.delta)?;
-    let actual_delta = checked_delta(&id.0, new, value.0)?;
+        .expect("Metric change target is unavailable");
+    let new = bounded_value(bounds, &id.0, value.0 + change.delta);
+    let actual_delta = checked_delta(&id.0, new, value.0);
     if actual_delta != 0.0 {
         value.0 = new;
     }
-    Ok((actual_delta, collapse.is_some() && new >= 100.0))
+    (actual_delta, collapse.is_some() && new >= 100.0)
 }
 
 fn advance_time(
@@ -134,18 +123,12 @@ fn advance_time(
 ) {
     while months.0 > 0 {
         months.0 -= 1;
-        let Some((month, current)) = find_metric(&values, MONTH_METRIC_ID) else {
-            warn!("Month metric is unavailable");
-            months.0 = 0;
-            return;
-        };
+        let (month, current) =
+            find_metric(&values, MONTH_METRIC_ID).expect("Month metric is unavailable");
         let new_year = current + 1.0 > 12.0;
         if new_year {
-            let Some((year, _)) = find_metric(&values, YEAR_METRIC_ID) else {
-                warn!("Year metric is unavailable");
-                months.0 = 0;
-                return;
-            };
+            let (year, _) =
+                find_metric(&values, YEAR_METRIC_ID).expect("Year metric is unavailable");
             pending.0.push_back(MetricChange {
                 target: month,
                 delta: 1.0 - current,
@@ -164,9 +147,7 @@ fn advance_time(
             return;
         }
         if new_year {
-            if let Err(error) = enqueue_annual_changes(&values, &annual, &mut pending) {
-                warn!("Annual settlement failed: {error}");
-            }
+            enqueue_annual_changes(&values, &annual, &mut pending);
             if process_metric_changes(&mut values, &immediate, &mut pending, &mut months) {
                 return;
             }
@@ -186,7 +167,7 @@ fn enqueue_annual_changes(
     values: &MetricValues,
     influences: &Query<(Entity, &MetricOrder, &AnnualInfluence), With<Metric>>,
     pending: &mut PendingMetricChanges,
-) -> Result<(), MetricError> {
+) {
     // Snapshot all Annual inputs before applying any settlement delta.
     let mut changes = Vec::new();
     for (target, order, annual) in influences.iter() {
@@ -194,17 +175,17 @@ fn enqueue_annual_changes(
         for input in &annual.0 {
             let (_, _, _, _, _, source) = values
                 .get(input.source)
-                .map_err(|_| MetricError::SimulationNotReady)?;
+                .expect("Annual influence source is unavailable");
             new_value += source.0 * input.factor;
         }
         let (_, id, _, _, _, current) = values
             .get(target)
-            .map_err(|_| MetricError::SimulationNotReady)?;
+            .expect("Annual influence target is unavailable");
         changes.push((
             order.0,
             MetricChange {
                 target,
-                delta: checked_delta(&id.0, new_value, current.0)?,
+                delta: checked_delta(&id.0, new_value, current.0),
             },
         ));
     }
@@ -212,34 +193,25 @@ fn enqueue_annual_changes(
     pending
         .0
         .extend(changes.into_iter().map(|(_, change)| change));
-    Ok(())
 }
 
-fn bounded_value(bounds: &MetricBounds, id: &str, mut value: f64) -> Result<f64, MetricError> {
+fn bounded_value(bounds: &MetricBounds, id: &str, mut value: f64) -> f64 {
     // f64::max/min ignore NaN; reject it before applying valid bounds.
-    if value.is_nan() {
-        return Err(MetricError::InvalidValue { id: id.into() });
-    }
+    assert!(!value.is_nan(), "Metric `{id}` value must not be NaN");
     if let Some(min) = bounds.min {
         value = value.max(min);
     }
     if let Some(max) = bounds.max {
         value = value.min(max);
     }
-    if value.is_finite() {
-        Ok(value)
-    } else {
-        Err(MetricError::InvalidValue { id: id.into() })
-    }
+    assert!(value.is_finite(), "Metric `{id}` value must be finite");
+    value
 }
 
-fn checked_delta(id: &str, new: f64, old: f64) -> Result<f64, MetricError> {
+fn checked_delta(id: &str, new: f64, old: f64) -> f64 {
     let delta = new - old;
-    if delta.is_finite() {
-        Ok(delta)
-    } else {
-        Err(MetricError::InvalidValue { id: id.into() })
-    }
+    assert!(delta.is_finite(), "Metric `{id}` delta must be finite");
+    delta
 }
 
 fn restart_game(values: &mut MetricValues) {
