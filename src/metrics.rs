@@ -2,9 +2,12 @@ mod asset;
 mod components;
 mod simulation;
 
-use std::{collections::HashMap, fmt};
+use std::collections::HashMap;
 
-use bevy::{asset::AssetApp, prelude::*};
+use bevy::{
+    asset::{AssetApp, LoadState},
+    prelude::*,
+};
 
 use asset::MetricCatalogLoader;
 pub use asset::{Influence, InfluenceTerm, MetricCatalog, MetricDefinition, validate_definitions};
@@ -16,46 +19,6 @@ pub const YEAR_METRIC_ID: &str = "year";
 pub const MONTH_METRIC_ID: &str = "month";
 pub const TERM_METRIC_ID: &str = "term";
 const METRIC_CATALOG_PATH: &str = "data/metrics.metric.ron";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MetricError {
-    DuplicateId(String),
-    MissingSource { target: String, source: String },
-    ImmediateCycle(Vec<String>),
-    AnnualSource { target: String, source: String },
-    InvalidDefinition { id: String, reason: String },
-    NonFiniteDelta,
-    InvalidValue { id: String },
-    SimulationNotReady,
-}
-
-impl fmt::Display for MetricError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateId(id) => write!(f, "duplicate metric id: {id}"),
-            Self::MissingSource { target, source } => {
-                write!(f, "metric {target} references missing source {source}")
-            }
-            Self::ImmediateCycle(ids) => {
-                write!(f, "Immediate influence cycle: {}", ids.join(" -> "))
-            }
-            Self::AnnualSource { target, source } => {
-                write!(
-                    f,
-                    "Annual metric {target} cannot reference Annual source {source}"
-                )
-            }
-            Self::InvalidDefinition { id, reason } => {
-                write!(f, "invalid metric {id}: {reason}")
-            }
-            Self::NonFiniteDelta => write!(f, "metric changes must have a finite delta"),
-            Self::InvalidValue { id } => write!(f, "calculation for metric {id} is not finite"),
-            Self::SimulationNotReady => write!(f, "a required metric entity is unavailable"),
-        }
-    }
-}
-
-impl std::error::Error for MetricError {}
 
 #[derive(Resource, Clone)]
 struct MetricCatalogHandle(Handle<MetricCatalog>);
@@ -85,9 +48,14 @@ fn request_metric_catalog(mut commands: Commands, asset_server: Res<AssetServer>
 fn handle_metric_catalog_events(
     mut commands: Commands,
     handle: Res<MetricCatalogHandle>,
+    asset_server: Res<AssetServer>,
     catalogs: Res<Assets<MetricCatalog>>,
     mut events: MessageReader<AssetEvent<MetricCatalog>>,
 ) {
+    if let LoadState::Failed(error) = asset_server.load_state(handle.0.id()) {
+        panic!("required metric catalog {METRIC_CATALOG_PATH} failed to load: {error}");
+    }
+
     for event in events.read() {
         let AssetEvent::LoadedWithDependencies { id } = event else {
             continue;
@@ -97,9 +65,9 @@ fn handle_metric_catalog_events(
             continue;
         }
 
-        let Some(catalog) = catalogs.get(&handle.0) else {
-            continue;
-        };
+        let catalog = catalogs
+            .get(&handle.0)
+            .expect("loaded metric catalog must be available");
 
         spawn_metric_entities(&mut commands, &catalog.metrics);
     }
