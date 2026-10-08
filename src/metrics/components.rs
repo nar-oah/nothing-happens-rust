@@ -41,6 +41,3 @@ pub struct AnnualInfluence(pub Vec<MetricInput>);
 
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct CollapseMetric;
-
-#[derive(Resource, Clone, Copy, Debug, Default)]
-pub struct MetricReady;

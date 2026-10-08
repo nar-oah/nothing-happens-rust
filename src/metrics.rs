@@ -72,7 +72,7 @@ impl Plugin for MetricPlugin {
             .add_systems(Startup, request_metric_catalog)
             .add_systems(
                 Update,
-                spawn_metrics_when_loaded.before(SimulationSet::ApplyChanges),
+                handle_metric_catalog_events.before(SimulationSet::ApplyChanges),
             );
     }
 }
@@ -82,35 +82,34 @@ fn request_metric_catalog(mut commands: Commands, asset_server: Res<AssetServer>
     commands.insert_resource(MetricCatalogHandle(handle));
 }
 
-fn spawn_metrics_when_loaded(world: &mut World) {
-    if world.contains_resource::<MetricReady>() {
-        return;
+fn handle_metric_catalog_events(
+    mut commands: Commands,
+    handle: Res<MetricCatalogHandle>,
+    catalogs: Res<Assets<MetricCatalog>>,
+    mut events: MessageReader<AssetEvent<MetricCatalog>>,
+) {
+    for event in events.read() {
+        let AssetEvent::LoadedWithDependencies { id } = event else {
+            continue;
+        };
+
+        if *id != handle.0.id() {
+            continue;
+        }
+
+        let Some(catalog) = catalogs.get(&handle.0) else {
+            continue;
+        };
+
+        spawn_metric_entities(&mut commands, &catalog.metrics);
     }
-
-    let Some(handle) = world.get_resource::<MetricCatalogHandle>().cloned() else {
-        return;
-    };
-
-    let definitions = {
-        let catalogs = world.resource::<Assets<MetricCatalog>>();
-        catalogs
-            .get(&handle.0)
-            .map(|catalog| catalog.metrics.clone())
-    };
-
-    let Some(definitions) = definitions else {
-        return;
-    };
-
-    spawn_metric_entities(world, &definitions);
-    world.insert_resource(MetricReady);
 }
 
-fn spawn_metric_entities(world: &mut World, definitions: &[MetricDefinition]) {
+fn spawn_metric_entities(commands: &mut Commands, definitions: &[MetricDefinition]) {
     let mut entities = HashMap::new();
 
     for (order, definition) in definitions.iter().enumerate() {
-        let mut entity = world.spawn((
+        let mut entity = commands.spawn((
             Metric,
             MetricId(definition.id.clone()),
             MetricMetadata {
@@ -144,7 +143,7 @@ fn spawn_metric_entities(world: &mut World, definitions: &[MetricDefinition]) {
                 .collect()
         };
 
-        let mut entity = world.entity_mut(entities[definition.id.as_str()]);
+        let mut entity = commands.entity(entities[definition.id.as_str()]);
         match &definition.influence {
             Some(Influence::Immediate(terms)) => {
                 entity.insert(ImmediateInfluence(resolve(terms)));

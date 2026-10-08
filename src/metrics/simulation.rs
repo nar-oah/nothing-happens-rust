@@ -35,8 +35,7 @@ pub(crate) fn configure_simulation(app: &mut App) {
             (
                 apply_pending_metric_changes.in_set(SimulationSet::ApplyChanges),
                 advance_time.in_set(SimulationSet::AdvanceTime),
-            )
-                .run_if(resource_exists::<MetricReady>),
+            ),
         );
 }
 
