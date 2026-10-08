@@ -17,8 +17,8 @@ impl Plugin for DebugUiPlugin {
                 .after(SimulationSet::AdvanceTime)
                 .before(refresh_labels),
         )
-            .add_systems(Update, handle_buttons.before(SimulationSet::ApplyChanges))
-            .add_systems(Update, refresh_labels.after(SimulationSet::AdvanceTime));
+        .add_systems(Update, handle_buttons.before(SimulationSet::ApplyChanges))
+        .add_systems(Update, refresh_labels.after(SimulationSet::AdvanceTime));
     }
 }
 

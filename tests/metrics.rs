@@ -17,8 +17,8 @@ use nothing_happens::metrics::{
     AnnualInfluence, COLLAPSE_METRIC_ID, CollapseMetric, ImmediateInfluence, Influence,
     InfluenceTerm, InitialValue, MONTH_METRIC_ID, Metric, MetricBounds, MetricCatalog,
     MetricChange, MetricDefinition, MetricError, MetricId, MetricMetadata, MetricOrder,
-    MetricPlugin, MetricValue, PendingMetricChanges, PendingMonthAdvances,
-    SimulationSet, TERM_METRIC_ID, YEAR_METRIC_ID, validate_definitions,
+    MetricPlugin, MetricValue, PendingMetricChanges, PendingMonthAdvances, SimulationSet,
+    TERM_METRIC_ID, YEAR_METRIC_ID, validate_definitions,
 };
 
 const METRIC_CATALOG_PATH: &str = "data/metrics.metric.ron";
