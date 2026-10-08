@@ -73,7 +73,8 @@ pub fn validate_definitions(definitions: &[MetricDefinition]) -> Result<(), Bevy
         if indices.insert(definition.id.as_str(), index).is_some() {
             return Err(format!("duplicate metric id: {}", definition.id).into());
         }
-        let invalid = |reason: &str| BevyError::from(format!("invalid metric {}: {reason}", definition.id));
+        let invalid =
+            |reason: &str| BevyError::from(format!("invalid metric {}: {reason}", definition.id));
         if definition.id.trim().is_empty() || definition.name.trim().is_empty() {
             return Err(invalid("id and name must not be empty"));
         }
