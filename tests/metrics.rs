@@ -1,4 +1,5 @@
 use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
     time::{Duration, Instant},
 };
@@ -16,7 +17,7 @@ use bevy::{
 use nothing_happens::metrics::{
     AnnualInfluence, COLLAPSE_METRIC_ID, CollapseMetric, ImmediateInfluence, Influence,
     InfluenceTerm, InitialValue, MONTH_METRIC_ID, Metric, MetricBounds, MetricCatalog,
-    MetricChange, MetricDefinition, MetricError, MetricId, MetricMetadata, MetricOrder,
+    MetricChange, MetricDefinition, MetricId, MetricMetadata, MetricOrder,
     MetricPlugin, MetricValue, PendingMetricChanges, PendingMonthAdvances, SimulationSet,
     TERM_METRIC_ID, YEAR_METRIC_ID, validate_definitions,
 };
@@ -60,6 +61,10 @@ fn catalog_app(catalog: &str) -> App {
     let dir = Dir::default();
     dir.insert_asset_text(Path::new(METRIC_CATALOG_PATH), catalog);
 
+    catalog_app_with_dir(dir)
+}
+
+fn catalog_app_with_dir(dir: Dir) -> App {
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
         .register_asset_source(
@@ -319,11 +324,9 @@ fn propagated_deltas_are_appended_after_existing_requests_in_the_same_fifo() {
 }
 
 #[test]
-fn invalid_requests_are_discarded_without_blocking_valid_changes() {
-    let mut app = app_with(vec![
-        definition("source", 10.0, None),
-        definition("target", 5.0, immediate("source", 2.0)),
-    ]);
+#[should_panic(expected = "Metric change target is unavailable")]
+fn invalid_metric_target_panics() {
+    let mut app = app_with(vec![]);
     let unknown_target = app.world_mut().spawn_empty().id();
     app.world_mut()
         .resource_mut::<PendingMetricChanges>()
@@ -332,14 +335,68 @@ fn invalid_requests_are_discarded_without_blocking_valid_changes() {
             target: unknown_target,
             delta: 1.0,
         });
-    queue_change(&mut app, "source", f64::NAN);
-    queue_change(&mut app, "source", f64::INFINITY);
-    queue_change(&mut app, "source", 3.0);
     app.update();
+}
 
-    assert_value(&mut app, "source", 13.0);
-    assert_value(&mut app, "target", 11.0);
-    assert!(app.world().resource::<PendingMetricChanges>().0.is_empty());
+#[test]
+#[should_panic(expected = "Metric delta must be finite")]
+fn nan_metric_delta_panics() {
+    let mut app = app_with(vec![definition("source", 10.0, None)]);
+    change(&mut app, "source", f64::NAN);
+}
+
+#[test]
+#[should_panic(expected = "Metric delta must be finite")]
+fn infinite_metric_delta_panics() {
+    let mut app = app_with(vec![definition("source", 10.0, None)]);
+    change(&mut app, "source", f64::INFINITY);
+}
+
+#[test]
+#[should_panic(expected = "Metric `source` value must be finite")]
+fn metric_value_overflow_panics() {
+    let mut app = app_with(vec![definition("source", f64::MAX, None)]);
+    change(&mut app, "source", f64::MAX);
+}
+
+#[test]
+#[should_panic(expected = "Metric `annual` delta must be finite")]
+fn annual_calculation_overflow_panics() {
+    let mut app = app_with(vec![
+        definition("source", f64::MAX, None),
+        definition("annual", 0.0, annual("source", 2.0)),
+    ]);
+    advance_months(&mut app, 12);
+}
+
+#[test]
+#[should_panic(expected = "Month metric is unavailable")]
+fn missing_month_metric_panics() {
+    let mut app = app_with(vec![]);
+    let month = entity(&mut app, MONTH_METRIC_ID);
+    app.world_mut().despawn(month);
+    advance_months(&mut app, 1);
+}
+
+#[test]
+#[should_panic(expected = "Year metric is unavailable")]
+fn missing_year_metric_panics() {
+    let mut app = app_with(vec![]);
+    let year = entity(&mut app, YEAR_METRIC_ID);
+    app.world_mut().despawn(year);
+    advance_months(&mut app, 12);
+}
+
+#[test]
+#[should_panic(expected = "Annual influence source is unavailable")]
+fn missing_annual_source_entity_panics() {
+    let mut app = app_with(vec![
+        definition("source", 10.0, None),
+        definition("annual", 0.0, annual("source", 2.0)),
+    ]);
+    let source = entity(&mut app, "source");
+    app.world_mut().despawn(source);
+    advance_months(&mut app, 12);
 }
 
 #[test]
@@ -580,10 +637,8 @@ fn annual_source_is_rejected_during_validation() {
         definition("second", 2.0, annual("first", 3.0)),
     ]);
 
-    assert!(matches!(
-        result,
-        Err(MetricError::AnnualSource { target, source })
-            if target == "second" && source == "first"
+    assert!(result.unwrap_err().to_string().contains(
+        "Annual metric second cannot reference Annual source first"
     ));
 }
 
@@ -595,10 +650,8 @@ fn annual_source_is_rejected_even_when_declared_after_its_target() {
         definition("source", 10.0, None),
     ]);
 
-    assert!(matches!(
-        result,
-        Err(MetricError::AnnualSource { target, source })
-            if target == "second" && source == "first"
+    assert!(result.unwrap_err().to_string().contains(
+        "Annual metric second cannot reference Annual source first"
     ));
 }
 
@@ -606,10 +659,8 @@ fn annual_source_is_rejected_even_when_declared_after_its_target() {
 fn annual_self_dependency_is_rejected_during_validation() {
     let result = validate_definitions(&[definition("self", 2.0, annual("self", 2.0))]);
 
-    assert!(matches!(
-        result,
-        Err(MetricError::AnnualSource { target, source })
-            if target == "self" && source == "self"
+    assert!(result.unwrap_err().to_string().contains(
+        "Annual metric self cannot reference Annual source self"
     ));
 }
 
@@ -621,7 +672,7 @@ fn annual_cycle_is_rejected_during_validation() {
         definition("third", 4.0, annual("second", 4.0)),
     ]);
 
-    assert!(matches!(result, Err(MetricError::AnnualSource { .. })));
+    assert!(result.unwrap_err().to_string().contains("cannot reference Annual source"));
 }
 
 #[test]
@@ -665,17 +716,15 @@ fn duplicate_metric_ids_are_rejected_during_validation() {
         definition("duplicate", 1.0, None),
     ]);
 
-    assert!(matches!(result, Err(MetricError::DuplicateId(id)) if id == "duplicate"));
+    assert!(result.unwrap_err().to_string().contains("duplicate metric id: duplicate"));
 }
 
 #[test]
 fn missing_immediate_source_is_rejected_during_validation() {
     let result = validate_definitions(&[definition("target", 0.0, immediate("missing", 1.0))]);
 
-    assert!(matches!(
-        result,
-        Err(MetricError::MissingSource { target, source })
-            if target == "target" && source == "missing"
+    assert!(result.unwrap_err().to_string().contains(
+        "metric target references missing source missing"
     ));
 }
 
@@ -683,10 +732,8 @@ fn missing_immediate_source_is_rejected_during_validation() {
 fn missing_annual_source_is_rejected_during_validation() {
     let result = validate_definitions(&[definition("target", 0.0, annual("missing", 1.0))]);
 
-    assert!(matches!(
-        result,
-        Err(MetricError::MissingSource { target, source })
-            if target == "target" && source == "missing"
+    assert!(result.unwrap_err().to_string().contains(
+        "metric target references missing source missing"
     ));
 }
 
@@ -697,14 +744,14 @@ fn immediate_cycle_is_rejected_during_validation() {
         definition("right", 0.0, immediate("left", 1.0)),
     ]);
 
-    assert!(matches!(result, Err(MetricError::ImmediateCycle(_))));
+    assert!(result.unwrap_err().to_string().contains("Immediate influence cycle: left -> right -> left"));
 }
 
 #[test]
 fn immediate_self_dependency_is_rejected_during_validation() {
     let result = validate_definitions(&[definition("self", 0.0, immediate("self", 1.0))]);
 
-    assert!(matches!(result, Err(MetricError::ImmediateCycle(_))));
+    assert!(result.unwrap_err().to_string().contains("Immediate influence cycle: self -> self"));
 }
 
 #[test]
@@ -928,26 +975,20 @@ fn repository_metric_catalog_parses_and_runs_the_example_loop() {
     assert_date(&mut app, 2, 1);
 }
 
-#[test]
-fn invalid_metric_catalog_fails_to_load_without_spawning_metrics() {
-    let catalog = ron::to_string(&MetricCatalog {
-        metrics: vec![
-            definition("duplicate", 0.0, None),
-            definition("duplicate", 1.0, None),
-        ],
-    })
-    .unwrap();
-    let mut app = catalog_app(&catalog);
+fn assert_catalog_load_failure(mut app: App, reason: &str) {
     let handle: Handle<MetricCatalog> = app
         .world()
         .resource::<AssetServer>()
         .load(METRIC_CATALOG_PATH);
-    update_until(&mut app, |world| {
-        world
-            .resource::<AssetServer>()
-            .load_state(handle.id())
-            .is_failed()
-    });
+    let panic = catch_unwind(AssertUnwindSafe(|| update_until(&mut app, |_| false)))
+        .expect_err("required metric catalog load failure must panic");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("asset load panic contains a message");
+    assert!(message.contains("required metric catalog data/metrics.metric.ron failed to load"), "{message}");
+    assert!(message.contains(reason), "{message}");
 
     let LoadState::Failed(error) = app
         .world()
@@ -956,7 +997,7 @@ fn invalid_metric_catalog_fails_to_load_without_spawning_metrics() {
     else {
         panic!("invalid metric catalog must fail to load");
     };
-    assert!(error.to_string().contains("duplicate metric id: duplicate"));
+    assert!(error.to_string().contains(reason));
     let world = app.world_mut();
     assert_eq!(
         world
@@ -965,4 +1006,26 @@ fn invalid_metric_catalog_fails_to_load_without_spawning_metrics() {
             .count(),
         0
     );
+}
+
+#[test]
+fn invalid_metric_catalog_stops_the_game_without_spawning_metrics() {
+    let catalog = ron::to_string(&MetricCatalog {
+        metrics: vec![
+            definition("duplicate", 0.0, None),
+            definition("duplicate", 1.0, None),
+        ],
+    })
+    .unwrap();
+    assert_catalog_load_failure(catalog_app(&catalog), "duplicate metric id: duplicate");
+}
+
+#[test]
+fn malformed_metric_ron_stops_the_game() {
+    assert_catalog_load_failure(catalog_app("(metrics: ["), "1:12:");
+}
+
+#[test]
+fn missing_metric_catalog_stops_the_game() {
+    assert_catalog_load_failure(catalog_app_with_dir(Dir::default()), "not found");
 }
