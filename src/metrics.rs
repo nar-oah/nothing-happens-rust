@@ -4,10 +4,7 @@ mod simulation;
 
 use std::collections::HashMap;
 
-use bevy::{
-    asset::{AssetApp, LoadState},
-    prelude::*,
-};
+use bevy::{asset::AssetApp, prelude::*};
 
 use asset::MetricCatalogLoader;
 pub use asset::{Influence, InfluenceTerm, MetricCatalog, MetricDefinition, validate_definitions};
@@ -48,14 +45,9 @@ fn request_metric_catalog(mut commands: Commands, asset_server: Res<AssetServer>
 fn handle_metric_catalog_events(
     mut commands: Commands,
     handle: Res<MetricCatalogHandle>,
-    asset_server: Res<AssetServer>,
     catalogs: Res<Assets<MetricCatalog>>,
     mut events: MessageReader<AssetEvent<MetricCatalog>>,
 ) {
-    if let LoadState::Failed(error) = asset_server.load_state(handle.0.id()) {
-        panic!("required metric catalog {METRIC_CATALOG_PATH} failed to load: {error}");
-    }
-
     for event in events.read() {
         let AssetEvent::LoadedWithDependencies { id } = event else {
             continue;
