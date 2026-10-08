@@ -17,9 +17,9 @@ use bevy::{
 use nothing_happens::metrics::{
     AnnualInfluence, COLLAPSE_METRIC_ID, CollapseMetric, ImmediateInfluence, Influence,
     InfluenceTerm, InitialValue, MONTH_METRIC_ID, Metric, MetricBounds, MetricCatalog,
-    MetricChange, MetricDefinition, MetricId, MetricMetadata, MetricOrder,
-    MetricPlugin, MetricValue, PendingMetricChanges, PendingMonthAdvances, SimulationSet,
-    TERM_METRIC_ID, YEAR_METRIC_ID, validate_definitions,
+    MetricChange, MetricDefinition, MetricId, MetricMetadata, MetricOrder, MetricPlugin,
+    MetricValue, PendingMetricChanges, PendingMonthAdvances, SimulationSet, TERM_METRIC_ID,
+    YEAR_METRIC_ID, validate_definitions,
 };
 
 const METRIC_CATALOG_PATH: &str = "data/metrics.metric.ron";
@@ -637,9 +637,12 @@ fn annual_source_is_rejected_during_validation() {
         definition("second", 2.0, annual("first", 3.0)),
     ]);
 
-    assert!(result.unwrap_err().to_string().contains(
-        "Annual metric second cannot reference Annual source first"
-    ));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Annual metric second cannot reference Annual source first")
+    );
 }
 
 #[test]
@@ -650,18 +653,24 @@ fn annual_source_is_rejected_even_when_declared_after_its_target() {
         definition("source", 10.0, None),
     ]);
 
-    assert!(result.unwrap_err().to_string().contains(
-        "Annual metric second cannot reference Annual source first"
-    ));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Annual metric second cannot reference Annual source first")
+    );
 }
 
 #[test]
 fn annual_self_dependency_is_rejected_during_validation() {
     let result = validate_definitions(&[definition("self", 2.0, annual("self", 2.0))]);
 
-    assert!(result.unwrap_err().to_string().contains(
-        "Annual metric self cannot reference Annual source self"
-    ));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Annual metric self cannot reference Annual source self")
+    );
 }
 
 #[test]
@@ -672,7 +681,12 @@ fn annual_cycle_is_rejected_during_validation() {
         definition("third", 4.0, annual("second", 4.0)),
     ]);
 
-    assert!(result.unwrap_err().to_string().contains("cannot reference Annual source"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("cannot reference Annual source")
+    );
 }
 
 #[test]
@@ -716,25 +730,36 @@ fn duplicate_metric_ids_are_rejected_during_validation() {
         definition("duplicate", 1.0, None),
     ]);
 
-    assert!(result.unwrap_err().to_string().contains("duplicate metric id: duplicate"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate metric id: duplicate")
+    );
 }
 
 #[test]
 fn missing_immediate_source_is_rejected_during_validation() {
     let result = validate_definitions(&[definition("target", 0.0, immediate("missing", 1.0))]);
 
-    assert!(result.unwrap_err().to_string().contains(
-        "metric target references missing source missing"
-    ));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("metric target references missing source missing")
+    );
 }
 
 #[test]
 fn missing_annual_source_is_rejected_during_validation() {
     let result = validate_definitions(&[definition("target", 0.0, annual("missing", 1.0))]);
 
-    assert!(result.unwrap_err().to_string().contains(
-        "metric target references missing source missing"
-    ));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("metric target references missing source missing")
+    );
 }
 
 #[test]
@@ -744,14 +769,24 @@ fn immediate_cycle_is_rejected_during_validation() {
         definition("right", 0.0, immediate("left", 1.0)),
     ]);
 
-    assert!(result.unwrap_err().to_string().contains("Immediate influence cycle: left -> right -> left"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Immediate influence cycle: left -> right -> left")
+    );
 }
 
 #[test]
 fn immediate_self_dependency_is_rejected_during_validation() {
     let result = validate_definitions(&[definition("self", 0.0, immediate("self", 1.0))]);
 
-    assert!(result.unwrap_err().to_string().contains("Immediate influence cycle: self -> self"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Immediate influence cycle: self -> self")
+    );
 }
 
 #[test]
@@ -987,7 +1022,10 @@ fn assert_catalog_load_failure(mut app: App, reason: &str) {
         .map(String::as_str)
         .or_else(|| panic.downcast_ref::<&str>().copied())
         .expect("asset load panic contains a message");
-    assert!(message.contains("required metric catalog data/metrics.metric.ron failed to load"), "{message}");
+    assert!(
+        message.contains("required metric catalog data/metrics.metric.ron failed to load"),
+        "{message}"
+    );
     assert!(message.contains(reason), "{message}");
 
     let LoadState::Failed(error) = app
